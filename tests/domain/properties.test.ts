@@ -1,7 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { SolverInput } from "../../src/domain/selection-model/index.js";
-import { enumerateTopPlans, finalValidate } from "../../src/domain/selection-model/index.js";
+import {
+  assessSchedulability,
+  enumerateTopPlans,
+  finalValidate,
+} from "../../src/domain/selection-model/index.js";
 import type {
   Baseline,
   CourseCode,
@@ -11,6 +15,7 @@ import type {
   SectionId,
   TermSlot,
 } from "../../src/shared/contracts/index.js";
+import { ErrorCodes } from "../../src/shared/contracts/index.js";
 
 /**
  * 求解器性质测试锚点（docs/05 §3.1 —— Task 1 门禁）。
@@ -21,14 +26,56 @@ import type {
  */
 describe("selection-model 性质（对任意随机输入必须成立）", () => {
   it.todo("1. 考试无硬冲突：不同课程不得同一考试时间；同课程不同班允许（D37）");
-  it.todo("2. 池内性：所有推荐教学班 ∈ 待选池（AC-4.2）");
+  it("2. 池内性：所有推荐教学班 ∈ 待选池（AC-4.2）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        const poolSectionIds = collectPoolSectionIds(input);
+        for (const candidate of result.plans) {
+          for (const volunteer of candidate.volunteers) {
+            expect(poolSectionIds.has(volunteer.sectionId)).toBe(true);
+          }
+        }
+      }),
+      { numRuns: 100, seed: 20260710 },
+    );
+  });
   it.todo("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）");
   it.todo("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）");
   it.todo("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）");
   it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
   it.todo("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）");
   it.todo("8. 模型边界：第三/四轮、补选、学分因素不进入录取优先级或概率估计（D30、D38）");
-  it.todo("9. 缺失硬字段：考试/学分缺失的教学班不进排课结果，留在待选池并给原因（D37、D38）");
+  it("9. 缺失硬字段：考试/学分缺失的教学班不进排课结果，留在待选池并给原因（D37、D38）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const schedulability = assessSchedulability(input);
+        const missingHardFieldReasonById = collectMissingHardFieldReasons(input);
+
+        if (input.rules.creditLimit !== null) {
+          for (const [sectionId, reasonCode] of missingHardFieldReasonById) {
+            expect(schedulability.excluded).toContainEqual({ sectionId, reasonCode });
+          }
+        }
+
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          for (const volunteer of candidate.volunteers) {
+            expect(missingHardFieldReasonById.has(volunteer.sectionId)).toBe(false);
+          }
+        }
+      }),
+      { numRuns: 100, seed: 20260711 },
+    );
+  });
   it("10. Top10 边界：候选方案 ≤10 且每个都能独立通过 finalValidate（D39）", async () => {
     await fc.assert(
       fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
@@ -201,4 +248,29 @@ function rules(creditLimit: number | null): Rules {
     creditLimit,
     bars: [],
   };
+}
+
+function collectPoolSectionIds(input: SolverInput): Set<SectionId> {
+  return new Set(input.pool.targets.flatMap((target) => target.candidateSectionIds));
+}
+
+function collectMissingHardFieldReasons(input: SolverInput): Map<SectionId, string> {
+  const reasonById = new Map<SectionId, string>();
+  const poolSectionIds = collectPoolSectionIds(input);
+
+  for (const sectionId of poolSectionIds) {
+    const section = input.sections.get(sectionId);
+    if (!section) {
+      continue;
+    }
+    if (section.examTime === null) {
+      reasonById.set(sectionId, ErrorCodes.MODEL_MISSING_EXAM_TIME);
+      continue;
+    }
+    if (section.credits === null) {
+      reasonById.set(sectionId, ErrorCodes.MODEL_MISSING_CREDIT);
+    }
+  }
+
+  return reasonById;
 }
