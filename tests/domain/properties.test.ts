@@ -8,6 +8,7 @@ import {
 } from "../../src/domain/selection-model/index.js";
 import type {
   Baseline,
+  CandidatePlan,
   CourseCode,
   Pool,
   Rules,
@@ -25,7 +26,21 @@ import { ErrorCodes } from "../../src/shared/contracts/index.js";
  * 随机生成器建议：候选池（含缺失考试/学分的教学班）、锁定集、学分上限。
  */
 describe("selection-model 性质（对任意随机输入必须成立）", () => {
-  it.todo("1. 考试无硬冲突：不同课程不得同一考试时间；同课程不同班允许（D37）");
+  it("1. 考试无硬冲突：不同课程不得同一考试时间；同课程不同班允许（D37）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expectCrossCourseExamKeysToBeUnique(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260712 },
+    );
+  });
   it("2. 池内性：所有推荐教学班 ∈ 待选池（AC-4.2）", async () => {
     await fc.assert(
       fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
@@ -45,7 +60,27 @@ describe("selection-model 性质（对任意随机输入必须成立）", () => 
     );
   });
   it.todo("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）");
-  it.todo("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）");
+  it("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+
+        if (result.kind === "infeasible") {
+          expect(result.conflicts.length).toBeGreaterThan(0);
+          for (const conflict of result.conflicts) {
+            expect(conflict.errorCode.length).toBeGreaterThan(0);
+            expect(conflict.description.length).toBeGreaterThan(0);
+          }
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+        }
+      }),
+      { numRuns: 100, seed: 20260713 },
+    );
+  });
   it.todo("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）");
   it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
   it.todo("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）");
@@ -273,4 +308,35 @@ function collectMissingHardFieldReasons(input: SolverInput): Map<SectionId, stri
   }
 
   return reasonById;
+}
+
+function expectCrossCourseExamKeysToBeUnique(input: SolverInput, candidate: CandidatePlan): void {
+  const courseCodeByExamKey = new Map<string, CourseCode>();
+
+  for (const section of sectionsForCandidate(input, candidate)) {
+    if (section.examTime === null) {
+      continue;
+    }
+
+    const existingCourseCode = courseCodeByExamKey.get(section.examTime.examKey);
+    if (existingCourseCode && existingCourseCode !== section.courseCode) {
+      throw new Error(
+        `exam conflict: ${section.examTime.examKey} is shared by ${existingCourseCode} and ${section.courseCode}`,
+      );
+    }
+
+    courseCodeByExamKey.set(section.examTime.examKey, section.courseCode);
+  }
+}
+
+function sectionsForCandidate(input: SolverInput, candidate: CandidatePlan): Section[] {
+  const sectionIds = new Set([
+    ...input.baseline.selected,
+    ...candidate.volunteers.map((volunteer) => volunteer.sectionId),
+  ]);
+
+  return [...sectionIds].flatMap((sectionId) => {
+    const section = input.sections.get(sectionId);
+    return section ? [section] : [];
+  });
 }
