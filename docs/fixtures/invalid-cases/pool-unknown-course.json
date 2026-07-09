@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "pool.v1",
+  "targets": [
+    {
+      "courseCode": "NO-SUCH-COURSE",
+      "candidateSectionIds": ["SYN101-01"]
+    }
+  ]
+}

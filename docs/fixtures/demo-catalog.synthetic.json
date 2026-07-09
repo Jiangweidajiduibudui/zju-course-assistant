@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN101",
+      "courseName": "合成微积分演示",
+      "college": "演示学院",
+      "category": "演示-必修",
+      "sections": [
+        {
+          "sectionId": "SYN101-01",
+          "courseCode": "SYN101",
+          "courseName": "合成微积分演示",
+          "teachers": ["演示教师甲"],
+          "slots": [
+            { "term": "autumn", "dayOfWeek": 1, "period": 1 },
+            { "term": "autumn", "dayOfWeek": 1, "period": 2 }
+          ],
+          "place": "演示楼-101",
+          "examTime": { "examKey": "2026W-EXAM-A", "raw": "2027-01-20 08:00-10:00" },
+          "credits": 4,
+          "unverifiedRaw": { "rs": "120/130", "yxrs": "45" }
+        },
+        {
+          "sectionId": "SYN101-02",
+          "courseCode": "SYN101",
+          "courseName": "合成微积分演示",
+          "teachers": ["演示教师乙"],
+          "slots": [
+            { "term": "autumn", "dayOfWeek": 2, "period": 3 },
+            { "term": "autumn", "dayOfWeek": 2, "period": 4 }
+          ],
+          "place": "演示楼-102",
+          "examTime": { "examKey": "2026W-EXAM-A", "raw": "2027-01-20 08:00-10:00" },
+          "credits": 4,
+          "unverifiedRaw": { "rs": "115/130", "yxrs": "62" }
+        }
+      ]
+    },
+    {
+      "courseCode": "SYN201",
+      "courseName": "合成程序设计演示",
+      "college": "演示学院",
+      "category": "演示-选修",
+      "sections": [
+        {
+          "sectionId": "SYN201-01",
+          "courseCode": "SYN201",
+          "courseName": "合成程序设计演示",
+          "teachers": ["演示教师丙"],
+          "slots": [
+            { "term": "autumn", "dayOfWeek": 1, "period": 1 },
+            { "term": "autumn", "dayOfWeek": 3, "period": 6 }
+          ],
+          "place": "演示楼-201",
+          "examTime": { "examKey": "2026W-EXAM-B", "raw": "2027-01-21 14:00-16:00" },
+          "credits": 3,
+          "unverifiedRaw": { "rs": "60/60", "yxrs": "88" }
+        },
+        {
+          "sectionId": "SYN201-02",
+          "courseCode": "SYN201",
+          "courseName": "合成程序设计演示",
+          "teachers": ["演示教师丁", "演示教师戊"],
+          "slots": [{ "term": "autumn", "dayOfWeek": 4, "period": 7 }],
+          "place": "演示楼-202",
+          "examTime": null,
+          "credits": 3
+        }
+      ]
+    },
+    {
+      "courseCode": "SYN301",
+      "courseName": "合成通识演示",
+      "college": "演示通识学院",
+      "category": "演示-通识",
+      "sections": [
+        {
+          "sectionId": "SYN301-01",
+          "courseCode": "SYN301",
+          "courseName": "合成通识演示",
+          "teachers": ["演示教师己"],
+          "slots": [{ "term": "winter", "dayOfWeek": 5, "period": 9 }],
+          "place": "演示楼-301",
+          "examTime": { "examKey": "2026W-EXAM-C", "raw": "2027-01-22 10:00-12:00" },
+          "credits": null
+        }
+      ]
+    }
+  ]
+}

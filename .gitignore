@@ -1,30 +1,80 @@
-# Local tool / IDE state
-.claude/
-.omx/
-.agents/
-.codex/
-.idea/
-.vscode/
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
 
-# OS
-.DS_Store
-Thumbs.db
+# Build and TypeScript output
+dist/
+build/
+.vite/
+*.tsbuildinfo
 
-# Env
+# Tests and browser automation
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+
+# Logs and process files
+logs/
+*.log
+*.pid
+*.pid.lock
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files and secrets
 .env
-.env.local
+.env.*
+!.env.example
 *.local
 
-# Local generated analysis state
+# Local caches, scratch files, and databases
+.cache/
+.tmp/
+tmp/
+temp/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.dump
+.docker-data/
+postgres-data/
+
+# IDE and editor state
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local AI-agent configuration and runtime state
+.agents/
+.claude/
+.codex/
+.gemini/
+.kiro/
+.omx/
+.qoder/
 .code-review-graph/
+.cursorrules
+.windsurfrules
+.mcp.json
+.opencode.json
+AGENTS.md
+CLAUDE.md
+.github/code-review-graph.instruction.md
 
-# Dependencies
-node_modules/
+# Local development-mode notes and resumable progress ledger
+IMPLEMENT_MODE.md
+PROGRESS.md
 
-# Build output
-dist/
-
-# Test output
-test-results/
-playwright-report/
-playwright/.cache/
+# Operating-system metadata
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

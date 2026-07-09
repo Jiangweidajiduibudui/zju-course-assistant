@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "chalaoshi-seed.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "teachers": [
+    {
+      "teacherId": 900001,
+      "name": "演示教师甲",
+      "college": "演示学院",
+      "rating": 4.6,
+      "ratingCount": 128,
+      "gpaByCourse": [{ "courseName": "合成微积分演示", "gpa": 3.9, "sampleLabel": "500+" }],
+      "callRollPercent": 12,
+      "comments": [
+        {
+          "text": "（合成评论）讲课清晰，作业量适中。",
+          "likes": 8,
+          "dislikes": 0,
+          "postedAt": "2025-10-12"
+        },
+        {
+          "text": "（合成评论）期末复习范围明确。",
+          "likes": 5,
+          "dislikes": 1,
+          "postedAt": "2024-06-30"
+        },
+        {
+          "text": "（合成评论）节奏偏快，需要预习。",
+          "likes": 3,
+          "dislikes": 0,
+          "postedAt": "2023-12-05"
+        },
+        {
+          "text": "（合成评论）答疑很耐心。",
+          "likes": 6,
+          "dislikes": 0,
+          "postedAt": "2023-04-18"
+        },
+        {
+          "text": "（合成评论）给分符合预期。",
+          "likes": 4,
+          "dislikes": 2,
+          "postedAt": "2022-11-22"
+        }
+      ]
+    },
+    {
+      "teacherId": 900002,
+      "name": "演示教师乙",
+      "college": "演示学院",
+      "rating": 3.8,
+      "ratingCount": 41,
+      "gpaByCourse": [{ "courseName": "合成微积分演示", "gpa": 3.4, "sampleLabel": "100+" }],
+      "callRollPercent": 65,
+      "comments": [
+        {
+          "text": "（合成评论）会点名，注意出勤。",
+          "likes": 9,
+          "dislikes": 0,
+          "postedAt": "2025-05-20"
+        },
+        {
+          "text": "（合成评论）内容扎实但偏难。",
+          "likes": 2,
+          "dislikes": 1,
+          "postedAt": "2024-12-01"
+        }
+      ]
+    },
+    {
+      "teacherId": 900003,
+      "name": "演示教师丙",
+      "college": "演示学院",
+      "rating": null,
+      "ratingCount": 0,
+      "gpaByCourse": [],
+      "callRollPercent": null,
+      "comments": []
+    }
+  ]
+}

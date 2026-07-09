@@ -1,23 +1,20 @@
 {
+  // 编辑器默认配置（覆盖全仓库，宽松取并集，便于 IDE 语言服务）。
+  // CI 权威 typecheck 用 tsconfig.client.json 与 tsconfig.server.json（pnpm typecheck）。
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["src/shared/*"]
-    }
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src",
+    "tests",
+    "scripts",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
 }

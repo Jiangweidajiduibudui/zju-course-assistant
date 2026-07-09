@@ -1,0 +1,13 @@
+{
+  // 客户端 typecheck（docs/07 §4.1：bundler + ESNext + noEmit）。
+  // client 只允许 import shared/domain，禁止 import server（docs/07 §3；scripts/verify-no-zdbk-write.ts 附带方向检查）。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  "include": ["src/client", "src/shared", "src/domain"]
+}

@@ -1,0 +1,25 @@
+import type { FastifyInstance } from "fastify";
+import { ErrorCodes } from "../../../shared/contracts/errors.js";
+
+/**
+ * planner 模块路由（负责人接入，依赖 C/D 的交付；docs/08 §5.1）。
+ *
+ * 定位：编排两阶段 LLM 与 selection-model（docs/04 §3.2 流水线①–⑦）。
+ * 边界：不复制领域硬约束逻辑 —— 一切校验调用 selection-model。
+ *
+ * 编排顺序（阶段号对应 docs/04 §3.2）：
+ * ① 输入装配（刷新 chalaoshi 数据，D20）→ ② 硬过滤（selection-model）
+ * → ③ LLM 组内排序（llm-gateway）→ ④ Top10 枚举（selection-model）
+ * → ⑤ LLM 方案比较（llm-gateway）→ ⑥ 终校验（selection-model.finalValidate）
+ * → ⑦ 原子应用（全过才返回；失败/取消不改状态，D27）。
+ *
+ * 并发（D27）：请求携带递增 generationId；旧代际结果直接丢弃（PLAN_STALE_GENERATION）。
+ * 成功判据：Task 4/6 门禁 —— 无 key 不生成推荐；校验失败不改状态；E2E 主流程绿。
+ */
+export async function plannerRoutes(app: FastifyInstance): Promise<void> {
+  const notImplemented = { errorCode: ErrorCodes.COMMON_NOT_IMPLEMENTED, message: "Task 4/6 交付" };
+  // POST /api/planner/generate    生成推荐（支持取消：AbortSignal 贯穿全链路）
+  app.post("/generate", async (_req, reply) => reply.code(501).send(notImplemented));
+  // POST /api/planner/reoptimize  最小扰动重排（锁定项不动）
+  app.post("/reoptimize", async (_req, reply) => reply.code(501).send(notImplemented));
+}

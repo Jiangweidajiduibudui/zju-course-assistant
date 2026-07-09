@@ -1,0 +1,11 @@
+{
+  // 服务端 + 领域 + 脚本 + node 侧测试的 typecheck（docs/07 §4.1：NodeNext）。
+  // 注意：NodeNext 下相对导入必须写 .js 扩展名（指向同名 .ts 源文件）。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
+  },
+  "include": ["src/server", "src/shared", "src/domain", "scripts", "tests"]
+}

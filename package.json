@@ -1,17 +1,64 @@
 {
   "name": "zju-course-assistant",
+  "version": "0.1.0",
   "private": true,
-  "description": "浙江大学 AI 选课助手 — advise-only 选课推荐网站",
-  "scripts": {
-    "dev": "pnpm --filter @zju/client dev",
-    "build": "pnpm --filter @zju/client build",
-    "preview": "pnpm --filter @zju/client preview",
-    "lint": "pnpm --filter @zju/client exec tsc --noEmit",
-    "test": "pnpm exec playwright test --config tests/e2e/playwright.config.ts",
-    "test:ui": "pnpm exec playwright test --config tests/e2e/playwright.config.ts --ui",
-    "verify": "pnpm lint && pnpm build && pnpm test"
-  },
+  "description": "浙大 AI 选课助手：advise-only 的第一/二轮概率选课决策辅助网站（见 PROJECT.md 与 docs/01-08）",
+  "type": "module",
+  "packageManager": "pnpm@11.10.0",
   "engines": {
-    "node": ">=18"
+    "node": ">=24.17.0 <25"
+  },
+  "scripts": {
+    "dev": "concurrently -n web,api -c blue,green \"pnpm dev:web\" \"pnpm dev:api\"",
+    "dev:web": "vite",
+    "dev:api": "tsx watch src/server/index.ts",
+    "check": "biome ci .",
+    "format": "biome format --write .",
+    "typecheck": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "build": "pnpm build:web && pnpm build:api",
+    "build:web": "vite build",
+    "build:api": "tsc -p tsconfig.server.build.json",
+    "start": "node dist/server/index.js",
+    "verify": "pnpm check && pnpm typecheck && pnpm test && pnpm build && pnpm verify:no-zdbk-write && pnpm verify:doc-links",
+    "verify:no-zdbk-write": "tsx scripts/verify-no-zdbk-write.ts",
+    "verify:doc-links": "tsx scripts/verify-doc-links.ts"
+  },
+  "dependencies": {
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/static": "9.3.0",
+    "@tanstack/react-query": "5.101.2",
+    "cheerio": "1.2.0",
+    "dexie": "4.4.4",
+    "dexie-react-hooks": "4.4.0",
+    "fastify": "5.10.0",
+    "lru-cache": "11.5.2",
+    "lucide-react": "1.23.0",
+    "pg": "8.22.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@playwright/test": "1.61.1",
+    "@tailwindcss/vite": "4.3.2",
+    "@types/node": "24.13.3",
+    "@types/pg": "8.20.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "concurrently": "10.0.3",
+    "fast-check": "4.8.0",
+    "tailwindcss": "4.3.2",
+    "tsx": "4.23.0",
+    "typescript": "6.0.3",
+    "vite": "8.1.3",
+    "vitest": "4.1.10"
   }
 }
