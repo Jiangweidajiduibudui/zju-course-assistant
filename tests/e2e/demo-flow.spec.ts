@@ -62,6 +62,15 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByText("Session 草稿：合成 Demo session")).toBeVisible();
   await expect(page.getByText("待选池目标：3 门课程")).toBeVisible();
   await expect(page.getByText("候选教学班总数：5")).toBeVisible();
+  await expect(page.getByText("生成推荐前置状态")).toBeVisible();
+  await expect(
+    page.getByText("用户前置已完成；生成推荐暂不可用：等待 selection-model 接入"),
+  ).toBeVisible();
+  await expect(page.getByText("学分上限已填写：18 学分")).toBeVisible();
+  await expect(page.getByText("待选池已准备：3 门课程 / 5 个候选教学班")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "生成推荐（等待 selection-model）" }),
+  ).toBeDisabled();
 
   await page.getByRole("button", { name: "查看预期课表" }).click();
   await expect(page.getByRole("heading", { name: /预期课表/ })).toBeVisible();

@@ -1,4 +1,5 @@
 import type { Catalog, Session } from "../../../shared/contracts/index.js";
+import { getRecommendationReadiness } from "../session/recommendationReadiness";
 import { countSessionPoolSections } from "../session/sessionSummary";
 
 /**
@@ -21,6 +22,7 @@ interface WishPlanPageProps {
 export function WishPlanPage({ catalog, session, onOpenTimetable }: WishPlanPageProps) {
   const sections = catalog?.courses.flatMap((course) => course.sections) ?? [];
   const candidateCount = session ? countSessionPoolSections(session) : sections.length;
+  const readiness = getRecommendationReadiness(session);
 
   return (
     <section className="space-y-4 p-6">
@@ -40,6 +42,37 @@ export function WishPlanPage({ catalog, session, onOpenTimetable }: WishPlanPage
             <p className="mt-1 text-sm text-gray-600">
               真正的课程志愿组、时间槽志愿组、锁定和重新优化将由 selection-model 与 Task 5
               接入；本页当前只展示主线骨架。
+            </p>
+          </div>
+
+          <div className="rounded-lg border bg-white p-4">
+            <h3 className="font-semibold">生成推荐前置状态</h3>
+            <p className="mt-1 text-sm text-gray-600">{readiness.summary}</p>
+            <ul className="mt-3 space-y-2 text-sm">
+              {readiness.items.map((item) => (
+                <li
+                  key={item.id}
+                  className={
+                    item.state === "ready"
+                      ? "text-emerald-700"
+                      : item.state === "missing"
+                        ? "text-amber-700"
+                        : "text-gray-600"
+                  }
+                >
+                  {item.label}：{item.detail}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              disabled={!readiness.canGenerateRecommendation}
+              className="mt-3 rounded border border-gray-300 px-3 py-2 text-sm text-gray-500 disabled:cursor-not-allowed disabled:bg-gray-100"
+            >
+              生成推荐（等待 selection-model）
+            </button>
+            <p className="mt-2 text-xs text-gray-500">
+              本按钮只是前置状态提示，不会调用 LLM、planner 或写入 zdbk。
             </p>
             <button
               type="button"
