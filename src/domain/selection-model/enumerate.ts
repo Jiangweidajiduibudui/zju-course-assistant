@@ -44,15 +44,14 @@ export function enumerateTopPlans(
   const schedulableSectionIds = new Set(assessSchedulability(input).schedulable);
   const groups = buildVolunteerGroups(input, groupOrderings);
   const groupById = new Map(groups.map((group) => [group.groupId, group]));
-  const planGroups: VolunteerGroup[] = [];
-  const volunteers: CandidatePlan["volunteers"] = [];
   const infeasibleConflicts: ConflictReport[] = [];
+  const searchTargets: SearchTarget[] = [];
 
   for (const target of input.pool.targets) {
-    const candidateSectionIds = target.candidateSectionIds.filter((sectionId) =>
-      schedulableSectionIds.has(sectionId),
+    const orderedSectionIds = orderTargetCandidates(input, target, groupOrderings).filter(
+      (sectionId) => schedulableSectionIds.has(sectionId),
     );
-    if (candidateSectionIds.length === 0) {
+    if (orderedSectionIds.length === 0) {
       infeasibleConflicts.push(
         conflict(
           ErrorCodes.MODEL_NO_FEASIBLE_PLAN,
@@ -65,10 +64,8 @@ export function enumerateTopPlans(
     }
 
     const formalCourseGroup = groupById.get(courseGroupId(target.courseCode));
-    const orderedSectionIds = (formalCourseGroup?.orderedSectionIds ?? candidateSectionIds).filter(
-      (sectionId) => schedulableSectionIds.has(sectionId),
-    );
-    if (orderedSectionIds.length === 0) {
+    const variants = buildVolunteerVariants(orderedSectionIds);
+    if (variants.length === 0) {
       infeasibleConflicts.push(
         conflict(
           ErrorCodes.MODEL_NO_FEASIBLE_PLAN,
@@ -80,24 +77,11 @@ export function enumerateTopPlans(
       continue;
     }
 
-    const groupId = formalCourseGroup?.groupId ?? courseGroupId(target.courseCode);
-    const planGroup: VolunteerGroup = {
-      groupId,
-      kind: "course",
-      ref: target.courseCode,
-      orderedSectionIds: asNonEmptyTopThree(orderedSectionIds),
+    searchTargets.push({
+      courseCode: target.courseCode,
+      groupId: formalCourseGroup?.groupId ?? courseGroupId(target.courseCode),
       invalidated: formalCourseGroup?.invalidated ?? null,
-    };
-    planGroups.push(planGroup);
-
-    planGroup.orderedSectionIds.forEach((sectionId, index) => {
-      volunteers.push({
-        sectionId,
-        courseCode: target.courseCode,
-        rank: toVolunteerRank(index),
-        groupId,
-        locked: input.lockedSectionIds.has(sectionId),
-      });
+      variants,
     });
   }
 
@@ -105,18 +89,172 @@ export function enumerateTopPlans(
     return { kind: "infeasible", conflicts: infeasibleConflicts };
   }
 
-  const plan: CandidatePlan = {
-    planId: "plan-1",
-    volunteers,
-    groups: planGroups,
-    totalCredits: calculateTotalCredits(input, volunteers),
-  };
-  const validation = finalValidate(input, plan);
-  if (validation.kind === "invalid") {
-    return { kind: "infeasible", conflicts: validation.conflicts };
+  const plans: CandidatePlan[] = [];
+  const invalidConflicts: ConflictReport[] = [];
+
+  enumeratePlanSelections(searchTargets, (selection) => {
+    if (plans.length >= maxPlans) {
+      return false;
+    }
+
+    const plan = buildCandidatePlan(input, selection, plans.length + 1);
+    const validation = finalValidate(input, plan);
+    if (validation.kind === "invalid") {
+      invalidConflicts.push(...validation.conflicts);
+      return true;
+    }
+
+    plans.push(plan);
+    return plans.length < maxPlans;
+  });
+
+  if (plans.length === 0) {
+    return {
+      kind: "infeasible",
+      conflicts:
+        invalidConflicts.length > 0
+          ? invalidConflicts
+          : [
+              conflict(
+                ErrorCodes.MODEL_NO_FEASIBLE_PLAN,
+                [],
+                input.pool.targets.map((target) => target.courseCode),
+                "没有生成可通过终校验的候选方案",
+              ),
+            ],
+    };
   }
 
-  return { kind: "plans", plans: [plan].slice(0, maxPlans) };
+  return { kind: "plans", plans };
+}
+
+interface SearchTarget {
+  courseCode: CourseCode;
+  groupId: string;
+  invalidated: VolunteerGroup["invalidated"];
+  variants: SectionId[][];
+}
+
+interface PlanSelection {
+  courseCode: CourseCode;
+  groupId: string;
+  invalidated: VolunteerGroup["invalidated"];
+  sectionIds: SectionId[];
+}
+
+function orderTargetCandidates(
+  input: SolverInput,
+  target: SolverInput["pool"]["targets"][number],
+  groupOrderings: readonly GroupOrdering[],
+): SectionId[] {
+  const groupId = courseGroupId(target.courseCode);
+  const candidateSet = new Set(target.candidateSectionIds);
+  const ordering = groupOrderings.find((item) => item.groupId === groupId);
+  const orderedFromLlm =
+    ordering?.orderedSectionIds.filter((sectionId) => candidateSet.has(sectionId)) ?? [];
+  const orderedSet = new Set(orderedFromLlm);
+  return uniqueSectionIds([
+    ...orderedFromLlm,
+    ...target.candidateSectionIds.filter((sectionId) => !orderedSet.has(sectionId)),
+  ]).filter((sectionId) => input.sections.has(sectionId));
+}
+
+function buildVolunteerVariants(orderedSectionIds: readonly SectionId[]): SectionId[][] {
+  const rankCount = Math.min(3, orderedSectionIds.length);
+  if (rankCount === 0) {
+    return [];
+  }
+  if (orderedSectionIds.length <= 3) {
+    return [orderedSectionIds.slice()];
+  }
+
+  const variants: SectionId[][] = [];
+  const current: SectionId[] = [];
+
+  function visit(startIndex: number): void {
+    if (current.length === rankCount) {
+      variants.push(current.slice());
+      return;
+    }
+
+    const remainingSlots = rankCount - current.length;
+    for (let index = startIndex; index <= orderedSectionIds.length - remainingSlots; index += 1) {
+      current.push(orderedSectionIds[index] as SectionId);
+      visit(index + 1);
+      current.pop();
+    }
+  }
+
+  visit(0);
+  return variants;
+}
+
+function enumeratePlanSelections(
+  targets: readonly SearchTarget[],
+  onSelection: (selection: readonly PlanSelection[]) => boolean,
+): void {
+  const current: PlanSelection[] = [];
+
+  function visit(targetIndex: number): boolean {
+    if (targetIndex === targets.length) {
+      return onSelection(current);
+    }
+
+    const target = targets[targetIndex] as SearchTarget;
+    for (const sectionIds of target.variants) {
+      current.push({
+        courseCode: target.courseCode,
+        groupId: target.groupId,
+        invalidated: target.invalidated,
+        sectionIds,
+      });
+      const shouldContinue = visit(targetIndex + 1);
+      current.pop();
+      if (!shouldContinue) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  visit(0);
+}
+
+function buildCandidatePlan(
+  input: SolverInput,
+  selection: readonly PlanSelection[],
+  planNumber: number,
+): CandidatePlan {
+  const groups: VolunteerGroup[] = [];
+  const volunteers: CandidatePlan["volunteers"] = [];
+
+  for (const selectedGroup of selection) {
+    groups.push({
+      groupId: selectedGroup.groupId,
+      kind: "course",
+      ref: selectedGroup.courseCode,
+      orderedSectionIds: asNonEmptyTopThree(selectedGroup.sectionIds),
+      invalidated: selectedGroup.invalidated,
+    });
+
+    selectedGroup.sectionIds.forEach((sectionId, index) => {
+      volunteers.push({
+        sectionId,
+        courseCode: selectedGroup.courseCode,
+        rank: toVolunteerRank(index),
+        groupId: selectedGroup.groupId,
+        locked: input.lockedSectionIds.has(sectionId),
+      });
+    });
+  }
+
+  return {
+    planId: `plan-${planNumber}`,
+    volunteers,
+    groups,
+    totalCredits: calculateTotalCredits(input, volunteers),
+  };
 }
 
 function validateGroupOrderings(
@@ -224,6 +362,10 @@ function courseCodesFor(input: SolverInput, sectionIds: readonly SectionId[]): C
     const section: Section | undefined = input.sections.get(sectionId);
     return section ? [section.courseCode] : [];
   });
+}
+
+function uniqueSectionIds(sectionIds: readonly SectionId[]): SectionId[] {
+  return [...new Set(sectionIds)];
 }
 
 function asNonEmptyTopThree(sectionIds: readonly SectionId[]): [SectionId, ...SectionId[]] {

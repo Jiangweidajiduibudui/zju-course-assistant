@@ -431,15 +431,15 @@ describe("志愿组 Top3 与候选枚举（Task 1 / C2）", () => {
       return;
     }
 
-    expect(result.plans).toHaveLength(1);
+    expect(result.plans.length).toBeGreaterThanOrEqual(1);
     expect(result.plans[0]?.volunteers.map((item) => [item.sectionId, item.rank])).toEqual([
       ["sec-4", 1],
       ["sec-2", 2],
       ["sec-3", 3],
     ]);
-    expect(result.plans[0] ? finalValidate(input, result.plans[0]) : null).toEqual({
-      kind: "valid",
-    });
+    for (const candidate of result.plans) {
+      expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+    }
   });
 });
 
@@ -481,5 +481,57 @@ describe("课程组优先与时间槽组失效（Task 1 / C3.1）", () => {
         byGroupId: "course:COURSE_A",
       },
     });
+  });
+});
+
+describe("TopN 候选枚举（Task 1 / C3.2）", () => {
+  it("Top3 组合不合法时继续尝试后续 LLM 顺序组合，并最多返回 maxPlans 个可终校验方案", () => {
+    const conflictingExam = { examKey: "same-exam", raw: "2026-12-31 08:00-10:00" };
+    const sections = [
+      section({ sectionId: "sec-a-1", courseCode: "COURSE_A", examTime: conflictingExam }),
+      section({ sectionId: "sec-a-2", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-3", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-4", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-5", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-b-1", courseCode: "COURSE_B", examTime: conflictingExam }),
+    ];
+    const input = inputFor(sections, {
+      creditLimit: 12,
+      poolTargets: [
+        {
+          courseCode: "COURSE_A",
+          candidateSectionIds: ["sec-a-1", "sec-a-2", "sec-a-3", "sec-a-4", "sec-a-5"],
+        },
+        { courseCode: "COURSE_B", candidateSectionIds: ["sec-b-1"] },
+      ],
+    });
+
+    const result = enumerateTopPlans(
+      input,
+      [
+        {
+          groupId: "course:COURSE_A",
+          orderedSectionIds: ["sec-a-1", "sec-a-2", "sec-a-3", "sec-a-4", "sec-a-5"],
+        },
+      ],
+      3,
+    );
+
+    expect(result.kind).toBe("plans");
+    if (result.kind !== "plans") {
+      return;
+    }
+
+    expect(result.plans).toHaveLength(3);
+    expect(result.plans[0]?.volunteers.map((item) => item.sectionId)).toEqual([
+      "sec-a-2",
+      "sec-a-3",
+      "sec-a-4",
+      "sec-b-1",
+    ]);
+    for (const candidate of result.plans) {
+      expect(candidate.volunteers.map((item) => item.sectionId)).not.toContain("sec-a-1");
+      expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+    }
   });
 });
