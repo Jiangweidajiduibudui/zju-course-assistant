@@ -1,4 +1,25 @@
-import { describe, it } from "vitest";
+import fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import { applyPlanAtomically } from "../../src/client/features/session/sessionPlan.js";
+import type { SolverInput } from "../../src/domain/selection-model/index.js";
+import {
+  assessSchedulability,
+  enumerateTopPlans,
+  finalValidate,
+  reoptimizeWithMinimalChange,
+} from "../../src/domain/selection-model/index.js";
+import type {
+  Baseline,
+  CandidatePlan,
+  CourseCode,
+  Pool,
+  Rules,
+  Section,
+  SectionId,
+  Session,
+  TermSlot,
+} from "../../src/shared/contracts/index.js";
+import { ErrorCodes, sessionSchema } from "../../src/shared/contracts/index.js";
 
 /**
  * 求解器性质测试锚点（docs/05 §3.1 —— Task 1 门禁）。
@@ -8,14 +29,746 @@ import { describe, it } from "vitest";
  * 随机生成器建议：候选池（含缺失考试/学分的教学班）、锁定集、学分上限。
  */
 describe("selection-model 性质（对任意随机输入必须成立）", () => {
-  it.todo("1. 考试无硬冲突：不同课程不得同一考试时间；同课程不同班允许（D37）");
-  it.todo("2. 池内性：所有推荐教学班 ∈ 待选池（AC-4.2）");
-  it.todo("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）");
-  it.todo("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）");
-  it.todo("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）");
-  it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
-  it.todo("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）");
+  it("1. 考试无硬冲突：不同课程不得同一考试时间；同课程不同班允许（D37）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expectCrossCourseExamKeysToBeUnique(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260712 },
+    );
+  });
+  it("2. 池内性：所有推荐教学班 ∈ 待选池（AC-4.2）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        const poolSectionIds = collectPoolSectionIds(input);
+        for (const candidate of result.plans) {
+          for (const volunteer of candidate.volunteers) {
+            expect(poolSectionIds.has(volunteer.sectionId)).toBe(true);
+          }
+        }
+      }),
+      { numRuns: 100, seed: 20260710 },
+    );
+  });
+  it("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）", async () => {
+    await fc.assert(
+      fc.asyncProperty(lockedSolverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+
+        expect(result.kind).toBe("plans");
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+          expectCandidateToPreserveLocks(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260715 },
+    );
+  });
+  it("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+
+        if (result.kind === "infeasible") {
+          expect(result.conflicts.length).toBeGreaterThan(0);
+          for (const conflict of result.conflicts) {
+            expect(conflict.errorCode.length).toBeGreaterThan(0);
+            expect(conflict.description.length).toBeGreaterThan(0);
+          }
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+        }
+      }),
+      { numRuns: 100, seed: 20260713 },
+    );
+  });
+  it("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）", async () => {
+    await fc.assert(
+      fc.asyncProperty(minimalPerturbationCaseArbitrary(), async ({ input, currentPlan }) => {
+        const minimalTarget = input.pool.targets[0];
+        expect(minimalTarget).toBeDefined();
+        if (!minimalTarget) {
+          return;
+        }
+
+        const { result, changeSet } = reoptimizeWithMinimalChange(input, currentPlan, [
+          {
+            groupId: "course:COURSE_MINIMAL",
+            orderedSectionIds: [
+              ...minimalTarget.candidateSectionIds.slice(3),
+              ...minimalTarget.candidateSectionIds.slice(0, 3),
+            ],
+          },
+        ]);
+
+        expect(result.kind).toBe("plans");
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        expect(result.plans).toHaveLength(1);
+        expectCandidateToMatchCurrentVolunteers(result.plans[0] as CandidatePlan, currentPlan);
+        expect(changeSet).toEqual({ added: [], removed: [], rankChanged: [] });
+        expectChangeSetToExcludeLockedSections(changeSet, input.lockedSectionIds);
+      }),
+      { numRuns: 100, seed: 20260716 },
+    );
+  });
+  it("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        atomicSessionFailureCaseArbitrary(),
+        async ({ input, session, failureMode }) => {
+          const candidatePlan =
+            failureMode === "cancelled"
+              ? validAtomicCandidatePlan()
+              : invalidOutOfPoolCandidatePlan();
+
+          const result = applyPlanAtomically(session, input, candidatePlan, {
+            label: "性质 6 原子性测试",
+            now: "2026-07-09T18:00:00.000+08:00",
+            cancelled: failureMode === "cancelled",
+          });
+
+          expect(result.kind).toBe("rejected");
+          if (result.kind !== "rejected") {
+            return;
+          }
+          expect(result.session).toEqual(session);
+          expect(result.errorCode).toBe(
+            failureMode === "cancelled"
+              ? ErrorCodes.PLAN_GENERATION_CANCELLED
+              : ErrorCodes.PLAN_FINAL_VALIDATION_FAILED,
+          );
+        },
+      ),
+      { numRuns: 100, seed: 20260717 },
+    );
+  });
+  it("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        const poolSectionIds = collectPoolSectionIds(input);
+        for (const candidate of result.plans) {
+          expectPlanVolunteersToStayInPool(candidate, poolSectionIds);
+          expectVolunteerCountsByCourseToBeAtMostThree(candidate);
+          expectVolunteerCountsByTimeslotToBeAtMostThree(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260714 },
+    );
+  });
   it.todo("8. 模型边界：第三/四轮、补选、学分因素不进入录取优先级或概率估计（D30、D38）");
-  it.todo("9. 缺失硬字段：考试/学分缺失的教学班不进排课结果，留在待选池并给原因（D37、D38）");
-  it.todo("10. Top10 边界：候选方案 ≤10 且每个都能独立通过 finalValidate（D39）");
+  it("9. 缺失硬字段：考试/学分缺失的教学班不进排课结果，留在待选池并给原因（D37、D38）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const schedulability = assessSchedulability(input);
+        const missingHardFieldReasonById = collectMissingHardFieldReasons(input);
+
+        if (input.rules.creditLimit !== null) {
+          for (const [sectionId, reasonCode] of missingHardFieldReasonById) {
+            expect(schedulability.excluded).toContainEqual({ sectionId, reasonCode });
+          }
+        }
+
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          for (const volunteer of candidate.volunteers) {
+            expect(missingHardFieldReasonById.has(volunteer.sectionId)).toBe(false);
+          }
+        }
+      }),
+      { numRuns: 100, seed: 20260711 },
+    );
+  });
+  it("10. Top10 边界：候选方案 ≤10 且每个都能独立通过 finalValidate（D39）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+
+        if (result.kind === "infeasible") {
+          expect(result.conflicts.length).toBeGreaterThan(0);
+          return;
+        }
+
+        expect(result.plans.length).toBeLessThanOrEqual(10);
+        for (const candidate of result.plans) {
+          expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+        }
+      }),
+      { numRuns: 100, seed: 20260709 },
+    );
+  });
 });
+
+interface GeneratedCourse {
+  courseCode: CourseCode;
+  sectionCount: number;
+}
+
+interface GeneratedCase {
+  input: SolverInput;
+  groupOrderings: Array<{ groupId: string; orderedSectionIds: SectionId[] }>;
+}
+
+interface MinimalPerturbationCase {
+  input: SolverInput;
+  currentPlan: CandidatePlan;
+}
+
+interface AtomicSessionFailureCase {
+  input: SolverInput;
+  session: Session;
+  failureMode: "cancelled" | "invalid";
+}
+
+function solverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
+  return fc
+    .array(fc.integer({ min: 1, max: 5 }), { minLength: 1, maxLength: 4 })
+    .chain((sectionCounts) => {
+      const courses = sectionCounts.map((sectionCount, courseIndex): GeneratedCourse => {
+        const courseNumber = courseIndex + 1;
+        return {
+          courseCode: `COURSE_${courseNumber}` as CourseCode,
+          sectionCount,
+        };
+      });
+      const sectionIds = courses.flatMap((course, courseIndex) =>
+        Array.from({ length: course.sectionCount }, (_, sectionIndex) =>
+          sectionIdFor(courseIndex, sectionIndex),
+        ),
+      );
+
+      return fc
+        .record({
+          creditLimit: fc.option(fc.integer({ min: 0, max: 18 }), { nil: null }),
+          missingExamIds: fc.subarray(sectionIds),
+          missingCreditIds: fc.subarray(sectionIds),
+          conflictingExamIds: fc.subarray(sectionIds),
+          crowdedSlotIds: fc.subarray(sectionIds),
+          reversedGroupIds: fc.subarray(
+            courses.filter((course) => course.sectionCount >= 2).map((course) => course.courseCode),
+          ),
+        })
+        .map((options) => buildGeneratedCase(courses, options));
+    });
+}
+
+function buildGeneratedCase(
+  courses: readonly GeneratedCourse[],
+  options: {
+    creditLimit: number | null;
+    missingExamIds: SectionId[];
+    missingCreditIds: SectionId[];
+    conflictingExamIds: SectionId[];
+    crowdedSlotIds: SectionId[];
+    reversedGroupIds: CourseCode[];
+  },
+): GeneratedCase {
+  const missingExamIds = new Set(options.missingExamIds);
+  const missingCreditIds = new Set(options.missingCreditIds);
+  const conflictingExamIds = new Set(options.conflictingExamIds);
+  const crowdedSlotIds = new Set(options.crowdedSlotIds);
+  const reversedGroupIds = new Set(options.reversedGroupIds);
+  const sections = courses.flatMap((course, courseIndex) =>
+    Array.from({ length: course.sectionCount }, (_, sectionIndex) => {
+      const sectionId = sectionIdFor(courseIndex, sectionIndex);
+      return sectionFor({
+        sectionId,
+        courseCode: course.courseCode,
+        slot: crowdedSlotIds.has(sectionId) ? crowdedSlot() : slotFor(courseIndex, sectionIndex),
+        examKey: conflictingExamIds.has(sectionId)
+          ? "shared-conflict"
+          : `exam-${courseIndex + 1}-${sectionIndex + 1}`,
+        examMissing: missingExamIds.has(sectionId),
+        creditMissing: missingCreditIds.has(sectionId),
+      });
+    }),
+  );
+  const poolTargets: Pool["targets"] = courses.map((course, courseIndex) => ({
+    courseCode: course.courseCode,
+    candidateSectionIds: Array.from({ length: course.sectionCount }, (_, sectionIndex) =>
+      sectionIdFor(courseIndex, sectionIndex),
+    ),
+  }));
+  const groupOrderings = poolTargets.flatMap((target) => {
+    if (target.candidateSectionIds.length < 2) {
+      return [];
+    }
+
+    return [
+      {
+        groupId: `course:${target.courseCode}`,
+        orderedSectionIds: reversedGroupIds.has(target.courseCode)
+          ? target.candidateSectionIds.slice().reverse()
+          : target.candidateSectionIds.slice(),
+      },
+    ];
+  });
+
+  return {
+    input: {
+      sections: new Map(sections.map((section) => [section.sectionId, section])),
+      baseline: baseline(),
+      pool: { schemaVersion: "pool.v1", targets: poolTargets },
+      rules: rules(options.creditLimit),
+      lockedSectionIds: new Set(),
+    },
+    groupOrderings,
+  };
+}
+
+function lockedSolverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
+  return fc
+    .array(fc.integer({ min: 1, max: 5 }), { minLength: 0, maxLength: 3 })
+    .map((extraSectionCounts) => {
+      const courses: GeneratedCourse[] = [
+        { courseCode: "COURSE_LOCKED" as CourseCode, sectionCount: 4 },
+        ...extraSectionCounts.map((sectionCount, index) => ({
+          courseCode: `COURSE_EXTRA_${index + 1}` as CourseCode,
+          sectionCount,
+        })),
+      ];
+      const generated = buildGeneratedCase(courses, {
+        creditLimit: 99,
+        missingExamIds: [],
+        missingCreditIds: [],
+        conflictingExamIds: [],
+        crowdedSlotIds: [],
+        reversedGroupIds: ["COURSE_LOCKED" as CourseCode],
+      });
+      const selectedFixed = sectionFor({
+        sectionId: "selected-fixed-1" as SectionId,
+        courseCode: "COURSE_SELECTED" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 7, period: 1 },
+        examKey: "exam-selected-fixed",
+        examMissing: false,
+        creditMissing: false,
+      });
+
+      return {
+        input: {
+          ...generated.input,
+          sections: new Map([
+            ...generated.input.sections,
+            [selectedFixed.sectionId, selectedFixed],
+          ]),
+          baseline: {
+            ...generated.input.baseline,
+            selected: [selectedFixed.sectionId],
+            volunteers: [{ sectionId: sectionIdFor(0, 0), rank: 1 }],
+          },
+          lockedSectionIds: new Set<SectionId>([sectionIdFor(0, 1)]),
+        },
+        groupOrderings: generated.groupOrderings,
+      };
+    });
+}
+
+function minimalPerturbationCaseArbitrary(): fc.Arbitrary<MinimalPerturbationCase> {
+  return fc.integer({ min: 1, max: 2 }).map((extraCandidateCount) => {
+    const currentSectionIds: SectionId[] = [
+      "minimal-current-1",
+      "minimal-current-2",
+      "minimal-current-3",
+    ].map((sectionId) => sectionId as SectionId);
+    const extraSectionIds: SectionId[] = Array.from(
+      { length: extraCandidateCount },
+      (_, index) => `minimal-extra-${index + 1}` as SectionId,
+    );
+    const candidateSectionIds = [...currentSectionIds, ...extraSectionIds];
+    const sections = candidateSectionIds.map((sectionId, index) =>
+      sectionFor({
+        sectionId,
+        courseCode: "COURSE_MINIMAL" as CourseCode,
+        slot: slotFor(0, index),
+        examKey: `exam-minimal-${index + 1}`,
+        examMissing: false,
+        creditMissing: false,
+      }),
+    );
+    const input: SolverInput = {
+      sections: new Map(sections.map((section) => [section.sectionId, section])),
+      baseline: baseline(),
+      pool: {
+        schemaVersion: "pool.v1",
+        targets: [{ courseCode: "COURSE_MINIMAL" as CourseCode, candidateSectionIds }],
+      },
+      rules: rules(18),
+      lockedSectionIds: new Set([currentSectionIds[0] as SectionId]),
+    };
+
+    return {
+      input,
+      currentPlan: {
+        planId: "current-plan",
+        volunteers: currentSectionIds.map((sectionId, index) => ({
+          sectionId,
+          courseCode: "COURSE_MINIMAL" as CourseCode,
+          rank: toVolunteerRank(index),
+          groupId: "course:COURSE_MINIMAL",
+          locked: index === 0,
+        })),
+        groups: [],
+        totalCredits: 3,
+      },
+    };
+  });
+}
+
+function atomicSessionFailureCaseArbitrary(): fc.Arbitrary<AtomicSessionFailureCase> {
+  return fc
+    .record({
+      failureMode: fc.constantFrom<"cancelled" | "invalid">("cancelled", "invalid"),
+      hasCurrentPlan: fc.boolean(),
+      hasHistory: fc.boolean(),
+    })
+    .map(({ failureMode, hasCurrentPlan, hasHistory }) => {
+      const inPoolSection = sectionFor({
+        sectionId: "atomic-in-pool" as SectionId,
+        courseCode: "COURSE_ATOMIC" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 1, period: 1 },
+        examKey: "exam-atomic",
+        examMissing: false,
+        creditMissing: false,
+      });
+      const outsideSection = sectionFor({
+        sectionId: "atomic-outside" as SectionId,
+        courseCode: "COURSE_OUTSIDE" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 2, period: 1 },
+        examKey: "exam-outside",
+        examMissing: false,
+        creditMissing: false,
+      });
+      const baseSession = sessionSchema.parse({
+        schemaVersion: "session.v1",
+        id: "session-atomic-property",
+        name: "原子性性质 session",
+        createdAt: "2026-07-09T18:00:00.000+08:00",
+        baseline: baseline(),
+        pool: {
+          schemaVersion: "pool.v1",
+          targets: [
+            {
+              courseCode: "COURSE_ATOMIC" as CourseCode,
+              candidateSectionIds: [inPoolSection.sectionId],
+            },
+          ],
+        },
+        rules: rules(18),
+        plan: hasCurrentPlan ? validAtomicCandidatePlan() : null,
+        history: hasHistory
+          ? [
+              {
+                at: "2026-07-09T17:00:00.000+08:00",
+                label: "已有历史快照",
+                pool: {
+                  schemaVersion: "pool.v1",
+                  targets: [
+                    {
+                      courseCode: "COURSE_ATOMIC" as CourseCode,
+                      candidateSectionIds: [inPoolSection.sectionId],
+                    },
+                  ],
+                },
+                rules: rules(18),
+                plan: null,
+              },
+            ]
+          : [],
+      });
+
+      return {
+        failureMode,
+        session: baseSession,
+        input: {
+          sections: new Map([
+            [inPoolSection.sectionId, inPoolSection],
+            [outsideSection.sectionId, outsideSection],
+          ]),
+          baseline: baseSession.baseline,
+          pool: baseSession.pool,
+          rules: baseSession.rules,
+          lockedSectionIds: new Set(),
+        },
+      };
+    });
+}
+
+function validAtomicCandidatePlan(): CandidatePlan {
+  return {
+    planId: "plan-atomic-valid",
+    volunteers: [
+      {
+        sectionId: "atomic-in-pool" as SectionId,
+        courseCode: "COURSE_ATOMIC" as CourseCode,
+        rank: 1,
+        groupId: "course:COURSE_ATOMIC",
+        locked: false,
+      },
+    ],
+    groups: [],
+    totalCredits: 3,
+  };
+}
+
+function invalidOutOfPoolCandidatePlan(): CandidatePlan {
+  return {
+    planId: "plan-atomic-invalid",
+    volunteers: [
+      {
+        sectionId: "atomic-outside" as SectionId,
+        courseCode: "COURSE_OUTSIDE" as CourseCode,
+        rank: 1,
+        groupId: "course:COURSE_OUTSIDE",
+        locked: false,
+      },
+    ],
+    groups: [],
+    totalCredits: 3,
+  };
+}
+
+function sectionFor(input: {
+  sectionId: SectionId;
+  courseCode: CourseCode;
+  slot: TermSlot;
+  examKey: string;
+  examMissing: boolean;
+  creditMissing: boolean;
+}): Section {
+  return {
+    sectionId: input.sectionId,
+    courseCode: input.courseCode,
+    courseName: `课程 ${input.courseCode}`,
+    teachers: ["合成教师"],
+    slots: [input.slot],
+    place: null,
+    examTime: input.examMissing
+      ? null
+      : { examKey: input.examKey, raw: `2026-12-${input.examKey}` },
+    credits: input.creditMissing ? null : 3,
+  };
+}
+
+function sectionIdFor(courseIndex: number, sectionIndex: number): SectionId {
+  return `sec-${courseIndex + 1}-${sectionIndex + 1}` as SectionId;
+}
+
+function slotFor(courseIndex: number, sectionIndex: number): TermSlot {
+  return {
+    term: "autumn",
+    dayOfWeek: ((courseIndex + sectionIndex) % 7) + 1,
+    period: (sectionIndex % 12) + 1,
+  };
+}
+
+function crowdedSlot(): TermSlot {
+  return { term: "autumn", dayOfWeek: 7, period: 15 };
+}
+
+function baseline(): Baseline {
+  return {
+    schemaVersion: "baseline.v1",
+    selected: [],
+    volunteers: [],
+    importedAt: "2026-07-09T10:00:00.000+08:00",
+  };
+}
+
+function rules(creditLimit: number | null): Rules {
+  return {
+    schemaVersion: "rules.v1",
+    creditLimit,
+    bars: [],
+  };
+}
+
+function collectPoolSectionIds(input: SolverInput): Set<SectionId> {
+  return new Set(input.pool.targets.flatMap((target) => target.candidateSectionIds));
+}
+
+function collectMissingHardFieldReasons(input: SolverInput): Map<SectionId, string> {
+  const reasonById = new Map<SectionId, string>();
+  const poolSectionIds = collectPoolSectionIds(input);
+
+  for (const sectionId of poolSectionIds) {
+    const section = input.sections.get(sectionId);
+    if (!section) {
+      continue;
+    }
+    if (section.examTime === null) {
+      reasonById.set(sectionId, ErrorCodes.MODEL_MISSING_EXAM_TIME);
+      continue;
+    }
+    if (section.credits === null) {
+      reasonById.set(sectionId, ErrorCodes.MODEL_MISSING_CREDIT);
+    }
+  }
+
+  return reasonById;
+}
+
+function expectCrossCourseExamKeysToBeUnique(input: SolverInput, candidate: CandidatePlan): void {
+  const courseCodeByExamKey = new Map<string, CourseCode>();
+
+  for (const section of sectionsForCandidate(input, candidate)) {
+    if (section.examTime === null) {
+      continue;
+    }
+
+    const existingCourseCode = courseCodeByExamKey.get(section.examTime.examKey);
+    if (existingCourseCode && existingCourseCode !== section.courseCode) {
+      throw new Error(
+        `exam conflict: ${section.examTime.examKey} is shared by ${existingCourseCode} and ${section.courseCode}`,
+      );
+    }
+
+    courseCodeByExamKey.set(section.examTime.examKey, section.courseCode);
+  }
+}
+
+function sectionsForCandidate(input: SolverInput, candidate: CandidatePlan): Section[] {
+  const sectionIds = new Set([
+    ...input.baseline.selected,
+    ...candidate.volunteers.map((volunteer) => volunteer.sectionId),
+  ]);
+
+  return [...sectionIds].flatMap((sectionId) => {
+    const section = input.sections.get(sectionId);
+    return section ? [section] : [];
+  });
+}
+
+function expectPlanVolunteersToStayInPool(
+  candidate: CandidatePlan,
+  poolSectionIds: ReadonlySet<SectionId>,
+): void {
+  for (const volunteer of candidate.volunteers) {
+    expect(poolSectionIds.has(volunteer.sectionId)).toBe(true);
+  }
+}
+
+function expectVolunteerCountsByCourseToBeAtMostThree(candidate: CandidatePlan): void {
+  const countByCourseCode = new Map<CourseCode, number>();
+
+  for (const volunteer of candidate.volunteers) {
+    countByCourseCode.set(
+      volunteer.courseCode,
+      (countByCourseCode.get(volunteer.courseCode) ?? 0) + 1,
+    );
+  }
+
+  for (const count of countByCourseCode.values()) {
+    expect(count).toBeLessThanOrEqual(3);
+  }
+}
+
+function expectVolunteerCountsByTimeslotToBeAtMostThree(
+  input: SolverInput,
+  candidate: CandidatePlan,
+): void {
+  const countByTimeslot = new Map<string, number>();
+
+  for (const volunteer of candidate.volunteers) {
+    const section = input.sections.get(volunteer.sectionId);
+    if (!section) {
+      continue;
+    }
+    for (const slot of section.slots) {
+      const key = `${slot.term}-${slot.dayOfWeek}-${slot.period}`;
+      countByTimeslot.set(key, (countByTimeslot.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const count of countByTimeslot.values()) {
+    expect(count).toBeLessThanOrEqual(3);
+  }
+}
+
+function expectCandidateToPreserveLocks(input: SolverInput, candidate: CandidatePlan): void {
+  const volunteerBySectionId = new Map(
+    candidate.volunteers.map((volunteer) => [volunteer.sectionId, volunteer]),
+  );
+
+  for (const selectedSectionId of input.baseline.selected) {
+    expect(volunteerBySectionId.has(selectedSectionId)).toBe(false);
+  }
+
+  for (const baselineVolunteer of input.baseline.volunteers) {
+    expect(volunteerBySectionId.get(baselineVolunteer.sectionId)?.rank).toBe(
+      baselineVolunteer.rank,
+    );
+  }
+
+  for (const lockedSectionId of input.lockedSectionIds) {
+    const volunteer = volunteerBySectionId.get(lockedSectionId);
+    expect(volunteer).toBeDefined();
+    expect(volunteer?.locked).toBe(true);
+  }
+}
+
+function expectCandidateToMatchCurrentVolunteers(
+  candidate: CandidatePlan,
+  currentPlan: CandidatePlan,
+): void {
+  expect(candidate.volunteers.map((volunteer) => [volunteer.sectionId, volunteer.rank])).toEqual(
+    currentPlan.volunteers.map((volunteer) => [volunteer.sectionId, volunteer.rank]),
+  );
+}
+
+function expectChangeSetToExcludeLockedSections(
+  changeSet: ReturnType<typeof reoptimizeWithMinimalChange>["changeSet"],
+  lockedSectionIds: ReadonlySet<SectionId>,
+): void {
+  if (!changeSet) {
+    return;
+  }
+
+  const changedSectionIds = [
+    ...changeSet.added,
+    ...changeSet.removed,
+    ...changeSet.rankChanged.map((change) => change.sectionId),
+  ];
+  for (const sectionId of changedSectionIds) {
+    expect(lockedSectionIds.has(sectionId)).toBe(false);
+  }
+}
+
+function toVolunteerRank(index: number): 1 | 2 | 3 {
+  if (index === 0) {
+    return 1;
+  }
+  if (index === 1) {
+    return 2;
+  }
+  return 3;
+}

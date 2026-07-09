@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { ErrorCodes } from "../../../shared/contracts/errors.js";
 
 /**
@@ -37,17 +38,155 @@ export function checkEndpointUrl(rawUrl: string): SsrfVerdict {
       reason: "仅允许 443 端口",
     };
   }
-  // TODO(Task 4, 组员 D): 字面量 IP（IPv4/IPv6/混合写法）与 localhost 判定；
-  // 参考 docs/05 §5.1 SSRF 用例矩阵，禁止只做字符串前缀匹配。
+  const hostname = normalizeHostname(url.hostname);
+  if (isLocalhostName(hostname)) {
+    return blocked(`禁止访问 localhost 域名：${hostname}`);
+  }
+
+  if (isIP(hostname) !== 0) {
+    return assertResolvedAddressAllowed(hostname);
+  }
+
   return { allowed: true };
 }
 
 /** DNS 解析后的 IP 白名单复查（Task 4 实现；重定向后同样调用） */
-export function assertResolvedAddressAllowed(_ip: string): SsrfVerdict {
-  // TODO(Task 4, 组员 D): 私网/回环/link-local/reserved 网段判定（IPv4 + IPv6）。
-  return {
-    allowed: false,
-    errorCode: ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF,
-    reason: "DNS 复查未实现（Task 4）——默认拒绝",
-  };
+export function assertResolvedAddressAllowed(ip: string): SsrfVerdict {
+  const normalizedIp = normalizeHostname(ip);
+  const ipVersion = isIP(normalizedIp);
+  if (ipVersion === 0) {
+    return blocked(`DNS 解析结果不是合法 IP：${ip}`);
+  }
+
+  if (ipVersion === 4 && isBlockedIpv4(normalizedIp)) {
+    return blocked(`DNS 解析结果指向受限 IPv4 地址：${normalizedIp}`);
+  }
+
+  if (ipVersion === 6 && isBlockedIpv6(normalizedIp)) {
+    return blocked(`DNS 解析结果指向受限 IPv6 地址：${normalizedIp}`);
+  }
+
+  return { allowed: true };
+}
+
+function normalizeHostname(hostname: string): string {
+  const withoutBrackets =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  return withoutBrackets.toLowerCase();
+}
+
+function isLocalhostName(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost");
+}
+
+function blocked(reason: string): SsrfVerdict {
+  return { allowed: false, errorCode: ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF, reason };
+}
+
+function isBlockedIpv4(ip: string): boolean {
+  const octets = ip.split(".").map((part) => Number.parseInt(part, 10));
+  const [first, second] = octets;
+  if (first === undefined || second === undefined || octets.some((octet) => Number.isNaN(octet))) {
+    return true;
+  }
+
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    first >= 224
+  );
+}
+
+function isBlockedIpv6(ip: string): boolean {
+  const mappedIpv4 = extractIpv4MappedAddress(ip);
+  if (mappedIpv4) {
+    return isBlockedIpv4(mappedIpv4);
+  }
+
+  const value = expandIpv6ToBigInt(ip);
+  if (value === null) {
+    return true;
+  }
+
+  return (
+    value === 0n ||
+    value === 1n ||
+    isIpv6InRange(value, 0xfc00n << 112n, 7) ||
+    isIpv6InRange(value, 0xfe80n << 112n, 10) ||
+    isIpv6InRange(value, 0xff00n << 112n, 8) ||
+    isIpv6InRange(value, 0x20010db8n << 96n, 32)
+  );
+}
+
+function extractIpv4MappedAddress(ip: string): string | null {
+  if (!ip.startsWith("::ffff:")) {
+    return null;
+  }
+
+  const mapped = ip.slice("::ffff:".length);
+  if (isIP(mapped) === 4) {
+    return mapped;
+  }
+
+  const groups = mapped.split(":");
+  if (groups.length !== 2) {
+    return null;
+  }
+
+  const high = Number.parseInt(groups[0] ?? "", 16);
+  const low = Number.parseInt(groups[1] ?? "", 16);
+  if (
+    !Number.isInteger(high) ||
+    !Number.isInteger(low) ||
+    high < 0 ||
+    high > 0xffff ||
+    low < 0 ||
+    low > 0xffff
+  ) {
+    return null;
+  }
+
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+}
+
+function expandIpv6ToBigInt(ip: string): bigint | null {
+  const [head = "", tail = ""] = ip.split("::", 2);
+  const headGroups = head === "" ? [] : head.split(":");
+  const tailGroups = tail === "" ? [] : tail.split(":");
+  const missingGroups = 8 - headGroups.length - tailGroups.length;
+  if (missingGroups < 0) {
+    return null;
+  }
+
+  const groups = [
+    ...headGroups,
+    ...Array.from({ length: missingGroups }, () => "0"),
+    ...tailGroups,
+  ];
+  if (groups.length !== 8) {
+    return null;
+  }
+
+  let value = 0n;
+  for (const group of groups) {
+    const parsed = Number.parseInt(group, 16);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 0xffff) {
+      return null;
+    }
+    value = (value << 16n) + BigInt(parsed);
+  }
+
+  return value;
+}
+
+function isIpv6InRange(value: bigint, prefixValue: bigint, prefixBits: number): boolean {
+  const hostBits = 128n - BigInt(prefixBits);
+  return value >> hostBits === prefixValue >> hostBits;
 }
