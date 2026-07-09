@@ -8,6 +8,7 @@ import {
   type Section,
   type SectionId,
 } from "../../shared/contracts/index.js";
+import { timeslotKey } from "./timeslot.js";
 import type { SolverInput, ValidationResult } from "./types.js";
 
 /**
@@ -96,6 +97,7 @@ export function finalValidate(input: SolverInput, plan: CandidatePlan): Validati
   conflicts.push(...validatePoolCoverage(input, planSectionIds));
   conflicts.push(...validateLocks(input, plan));
   conflicts.push(...validateGroupRanks(plan));
+  conflicts.push(...validateTimeslotVolunteerLimit(sectionsInPlan));
 
   const sectionsForHardChecks = collectSectionsForHardChecks(input, sectionsInPlan);
   conflicts.push(...validateHardFields(sectionsForHardChecks));
@@ -230,6 +232,37 @@ function validateGroupRanks(plan: CandidatePlan): ConflictReport[] {
         ),
       );
     }
+  }
+
+  return conflicts;
+}
+
+function validateTimeslotVolunteerLimit(sectionsInPlan: readonly Section[]): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+  const sectionsByTimeslot = new Map<string, Section[]>();
+
+  for (const section of sectionsInPlan) {
+    for (const slot of section.slots) {
+      const key = timeslotKey(slot);
+      const current = sectionsByTimeslot.get(key) ?? [];
+      current.push(section);
+      sectionsByTimeslot.set(key, current);
+    }
+  }
+
+  for (const [key, sections] of sectionsByTimeslot) {
+    if (sections.length <= 3) {
+      continue;
+    }
+
+    conflicts.push(
+      conflict(
+        ErrorCodes.MODEL_VOLUNTEER_LIMIT_TIMESLOT,
+        sections.map((section) => section.sectionId),
+        sections.map((section) => section.courseCode),
+        `同一时间段 ${key} 的志愿教学班数量超过 3 个`,
+      ),
+    );
   }
 
   return conflicts;

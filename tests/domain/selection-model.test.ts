@@ -332,6 +332,55 @@ describe("终校验基础硬约束（Task 1 / C1）", () => {
     );
   });
 
+  it("拒绝同一时间段超过 3 个志愿教学班", () => {
+    const crowdedSlot: TermSlot = { term: "autumn", dayOfWeek: 7, period: 15 };
+    const sections = [
+      section({ sectionId: "sec-a", courseCode: "COURSE_A", slots: [crowdedSlot] }),
+      section({ sectionId: "sec-b", courseCode: "COURSE_B", slots: [crowdedSlot] }),
+      section({ sectionId: "sec-c", courseCode: "COURSE_C", slots: [crowdedSlot] }),
+      section({ sectionId: "sec-d", courseCode: "COURSE_D", slots: [crowdedSlot] }),
+    ];
+
+    const result = finalValidate(
+      inputFor(sections),
+      plan([
+        {
+          sectionId: "sec-a",
+          courseCode: "COURSE_A",
+          rank: 1,
+          groupId: "course:COURSE_A",
+          locked: false,
+        },
+        {
+          sectionId: "sec-b",
+          courseCode: "COURSE_B",
+          rank: 1,
+          groupId: "course:COURSE_B",
+          locked: false,
+        },
+        {
+          sectionId: "sec-c",
+          courseCode: "COURSE_C",
+          rank: 1,
+          groupId: "course:COURSE_C",
+          locked: false,
+        },
+        {
+          sectionId: "sec-d",
+          courseCode: "COURSE_D",
+          rank: 1,
+          groupId: "course:COURSE_D",
+          locked: false,
+        },
+      ]),
+    );
+
+    expect(result.kind).toBe("invalid");
+    expect(result.kind === "invalid" ? result.conflicts[0]?.errorCode : null).toBe(
+      ErrorCodes.MODEL_VOLUNTEER_LIMIT_TIMESLOT,
+    );
+  });
+
   it("拒绝删除或改动已填志愿 / 手动锁定项", () => {
     const locked = section({ sectionId: "sec-locked", courseCode: "COURSE_A" });
     const input = inputFor([locked], {
@@ -488,12 +537,38 @@ describe("TopN 候选枚举（Task 1 / C3.2）", () => {
   it("Top3 组合不合法时继续尝试后续 LLM 顺序组合，并最多返回 maxPlans 个可终校验方案", () => {
     const conflictingExam = { examKey: "same-exam", raw: "2026-12-31 08:00-10:00" };
     const sections = [
-      section({ sectionId: "sec-a-1", courseCode: "COURSE_A", examTime: conflictingExam }),
-      section({ sectionId: "sec-a-2", courseCode: "COURSE_A" }),
-      section({ sectionId: "sec-a-3", courseCode: "COURSE_A" }),
-      section({ sectionId: "sec-a-4", courseCode: "COURSE_A" }),
-      section({ sectionId: "sec-a-5", courseCode: "COURSE_A" }),
-      section({ sectionId: "sec-b-1", courseCode: "COURSE_B", examTime: conflictingExam }),
+      section({
+        sectionId: "sec-a-1",
+        courseCode: "COURSE_A",
+        examTime: conflictingExam,
+        slots: [{ term: "autumn", dayOfWeek: 1, period: 1 }],
+      }),
+      section({
+        sectionId: "sec-a-2",
+        courseCode: "COURSE_A",
+        slots: [{ term: "autumn", dayOfWeek: 2, period: 2 }],
+      }),
+      section({
+        sectionId: "sec-a-3",
+        courseCode: "COURSE_A",
+        slots: [{ term: "autumn", dayOfWeek: 3, period: 3 }],
+      }),
+      section({
+        sectionId: "sec-a-4",
+        courseCode: "COURSE_A",
+        slots: [{ term: "autumn", dayOfWeek: 4, period: 4 }],
+      }),
+      section({
+        sectionId: "sec-a-5",
+        courseCode: "COURSE_A",
+        slots: [{ term: "autumn", dayOfWeek: 5, period: 5 }],
+      }),
+      section({
+        sectionId: "sec-b-1",
+        courseCode: "COURSE_B",
+        examTime: conflictingExam,
+        slots: [{ term: "autumn", dayOfWeek: 6, period: 6 }],
+      }),
     ];
     const input = inputFor(sections, {
       creditLimit: 12,

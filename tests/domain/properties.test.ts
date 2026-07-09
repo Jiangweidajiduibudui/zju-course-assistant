@@ -83,7 +83,24 @@ describe("selection-model 性质（对任意随机输入必须成立）", () => 
   });
   it.todo("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）");
   it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
-  it.todo("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）");
+  it("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）", async () => {
+    await fc.assert(
+      fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        const poolSectionIds = collectPoolSectionIds(input);
+        for (const candidate of result.plans) {
+          expectPlanVolunteersToStayInPool(candidate, poolSectionIds);
+          expectVolunteerCountsByCourseToBeAtMostThree(candidate);
+          expectVolunteerCountsByTimeslotToBeAtMostThree(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260714 },
+    );
+  });
   it.todo("8. 模型边界：第三/四轮、补选、学分因素不进入录取优先级或概率估计（D30、D38）");
   it("9. 缺失硬字段：考试/学分缺失的教学班不进排课结果，留在待选池并给原因（D37、D38）", async () => {
     await fc.assert(
@@ -164,6 +181,7 @@ function solverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
           missingExamIds: fc.subarray(sectionIds),
           missingCreditIds: fc.subarray(sectionIds),
           conflictingExamIds: fc.subarray(sectionIds),
+          crowdedSlotIds: fc.subarray(sectionIds),
           reversedGroupIds: fc.subarray(
             courses.filter((course) => course.sectionCount >= 2).map((course) => course.courseCode),
           ),
@@ -179,12 +197,14 @@ function buildGeneratedCase(
     missingExamIds: SectionId[];
     missingCreditIds: SectionId[];
     conflictingExamIds: SectionId[];
+    crowdedSlotIds: SectionId[];
     reversedGroupIds: CourseCode[];
   },
 ): GeneratedCase {
   const missingExamIds = new Set(options.missingExamIds);
   const missingCreditIds = new Set(options.missingCreditIds);
   const conflictingExamIds = new Set(options.conflictingExamIds);
+  const crowdedSlotIds = new Set(options.crowdedSlotIds);
   const reversedGroupIds = new Set(options.reversedGroupIds);
   const sections = courses.flatMap((course, courseIndex) =>
     Array.from({ length: course.sectionCount }, (_, sectionIndex) => {
@@ -192,7 +212,7 @@ function buildGeneratedCase(
       return sectionFor({
         sectionId,
         courseCode: course.courseCode,
-        slot: slotFor(courseIndex, sectionIndex),
+        slot: crowdedSlotIds.has(sectionId) ? crowdedSlot() : slotFor(courseIndex, sectionIndex),
         examKey: conflictingExamIds.has(sectionId)
           ? "shared-conflict"
           : `exam-${courseIndex + 1}-${sectionIndex + 1}`,
@@ -268,6 +288,10 @@ function slotFor(courseIndex: number, sectionIndex: number): TermSlot {
   };
 }
 
+function crowdedSlot(): TermSlot {
+  return { term: "autumn", dayOfWeek: 7, period: 15 };
+}
+
 function baseline(): Baseline {
   return {
     schemaVersion: "baseline.v1",
@@ -339,4 +363,50 @@ function sectionsForCandidate(input: SolverInput, candidate: CandidatePlan): Sec
     const section = input.sections.get(sectionId);
     return section ? [section] : [];
   });
+}
+
+function expectPlanVolunteersToStayInPool(
+  candidate: CandidatePlan,
+  poolSectionIds: ReadonlySet<SectionId>,
+): void {
+  for (const volunteer of candidate.volunteers) {
+    expect(poolSectionIds.has(volunteer.sectionId)).toBe(true);
+  }
+}
+
+function expectVolunteerCountsByCourseToBeAtMostThree(candidate: CandidatePlan): void {
+  const countByCourseCode = new Map<CourseCode, number>();
+
+  for (const volunteer of candidate.volunteers) {
+    countByCourseCode.set(
+      volunteer.courseCode,
+      (countByCourseCode.get(volunteer.courseCode) ?? 0) + 1,
+    );
+  }
+
+  for (const count of countByCourseCode.values()) {
+    expect(count).toBeLessThanOrEqual(3);
+  }
+}
+
+function expectVolunteerCountsByTimeslotToBeAtMostThree(
+  input: SolverInput,
+  candidate: CandidatePlan,
+): void {
+  const countByTimeslot = new Map<string, number>();
+
+  for (const volunteer of candidate.volunteers) {
+    const section = input.sections.get(volunteer.sectionId);
+    if (!section) {
+      continue;
+    }
+    for (const slot of section.slots) {
+      const key = `${slot.term}-${slot.dayOfWeek}-${slot.period}`;
+      countByTimeslot.set(key, (countByTimeslot.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const count of countByTimeslot.values()) {
+    expect(count).toBeLessThanOrEqual(3);
+  }
 }
