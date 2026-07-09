@@ -5,6 +5,7 @@ import {
   assessSchedulability,
   enumerateTopPlans,
   finalValidate,
+  reoptimizeWithMinimalChange,
 } from "../../src/domain/selection-model/index.js";
 import type {
   Baseline,
@@ -98,7 +99,38 @@ describe("selection-model 性质（对任意随机输入必须成立）", () => 
       { numRuns: 100, seed: 20260713 },
     );
   });
-  it.todo("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）");
+  it("5. 最小扰动：变更集不含锁定项，且无明显更少变更的等效解（启发式上界断言）", async () => {
+    await fc.assert(
+      fc.asyncProperty(minimalPerturbationCaseArbitrary(), async ({ input, currentPlan }) => {
+        const minimalTarget = input.pool.targets[0];
+        expect(minimalTarget).toBeDefined();
+        if (!minimalTarget) {
+          return;
+        }
+
+        const { result, changeSet } = reoptimizeWithMinimalChange(input, currentPlan, [
+          {
+            groupId: "course:COURSE_MINIMAL",
+            orderedSectionIds: [
+              ...minimalTarget.candidateSectionIds.slice(3),
+              ...minimalTarget.candidateSectionIds.slice(0, 3),
+            ],
+          },
+        ]);
+
+        expect(result.kind).toBe("plans");
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        expect(result.plans).toHaveLength(1);
+        expectCandidateToMatchCurrentVolunteers(result.plans[0] as CandidatePlan, currentPlan);
+        expect(changeSet).toEqual({ added: [], removed: [], rankChanged: [] });
+        expectChangeSetToExcludeLockedSections(changeSet, input.lockedSectionIds);
+      }),
+      { numRuns: 100, seed: 20260716 },
+    );
+  });
   it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
   it("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）", async () => {
     await fc.assert(
@@ -173,6 +205,11 @@ interface GeneratedCourse {
 interface GeneratedCase {
   input: SolverInput;
   groupOrderings: Array<{ groupId: string; orderedSectionIds: SectionId[] }>;
+}
+
+interface MinimalPerturbationCase {
+  input: SolverInput;
+  currentPlan: CandidatePlan;
 }
 
 function solverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
@@ -316,6 +353,57 @@ function lockedSolverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
         groupOrderings: generated.groupOrderings,
       };
     });
+}
+
+function minimalPerturbationCaseArbitrary(): fc.Arbitrary<MinimalPerturbationCase> {
+  return fc.integer({ min: 1, max: 2 }).map((extraCandidateCount) => {
+    const currentSectionIds: SectionId[] = [
+      "minimal-current-1",
+      "minimal-current-2",
+      "minimal-current-3",
+    ].map((sectionId) => sectionId as SectionId);
+    const extraSectionIds: SectionId[] = Array.from(
+      { length: extraCandidateCount },
+      (_, index) => `minimal-extra-${index + 1}` as SectionId,
+    );
+    const candidateSectionIds = [...currentSectionIds, ...extraSectionIds];
+    const sections = candidateSectionIds.map((sectionId, index) =>
+      sectionFor({
+        sectionId,
+        courseCode: "COURSE_MINIMAL" as CourseCode,
+        slot: slotFor(0, index),
+        examKey: `exam-minimal-${index + 1}`,
+        examMissing: false,
+        creditMissing: false,
+      }),
+    );
+    const input: SolverInput = {
+      sections: new Map(sections.map((section) => [section.sectionId, section])),
+      baseline: baseline(),
+      pool: {
+        schemaVersion: "pool.v1",
+        targets: [{ courseCode: "COURSE_MINIMAL" as CourseCode, candidateSectionIds }],
+      },
+      rules: rules(18),
+      lockedSectionIds: new Set([currentSectionIds[0] as SectionId]),
+    };
+
+    return {
+      input,
+      currentPlan: {
+        planId: "current-plan",
+        volunteers: currentSectionIds.map((sectionId, index) => ({
+          sectionId,
+          courseCode: "COURSE_MINIMAL" as CourseCode,
+          rank: toVolunteerRank(index),
+          groupId: "course:COURSE_MINIMAL",
+          locked: index === 0,
+        })),
+        groups: [],
+        totalCredits: 3,
+      },
+    };
+  });
 }
 
 function sectionFor(input: {
@@ -495,4 +583,41 @@ function expectCandidateToPreserveLocks(input: SolverInput, candidate: Candidate
     expect(volunteer).toBeDefined();
     expect(volunteer?.locked).toBe(true);
   }
+}
+
+function expectCandidateToMatchCurrentVolunteers(
+  candidate: CandidatePlan,
+  currentPlan: CandidatePlan,
+): void {
+  expect(candidate.volunteers.map((volunteer) => [volunteer.sectionId, volunteer.rank])).toEqual(
+    currentPlan.volunteers.map((volunteer) => [volunteer.sectionId, volunteer.rank]),
+  );
+}
+
+function expectChangeSetToExcludeLockedSections(
+  changeSet: ReturnType<typeof reoptimizeWithMinimalChange>["changeSet"],
+  lockedSectionIds: ReadonlySet<SectionId>,
+): void {
+  if (!changeSet) {
+    return;
+  }
+
+  const changedSectionIds = [
+    ...changeSet.added,
+    ...changeSet.removed,
+    ...changeSet.rankChanged.map((change) => change.sectionId),
+  ];
+  for (const sectionId of changedSectionIds) {
+    expect(lockedSectionIds.has(sectionId)).toBe(false);
+  }
+}
+
+function toVolunteerRank(index: number): 1 | 2 | 3 {
+  if (index === 0) {
+    return 1;
+  }
+  if (index === 1) {
+    return 2;
+  }
+  return 3;
 }

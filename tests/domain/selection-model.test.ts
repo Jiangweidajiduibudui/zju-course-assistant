@@ -7,6 +7,7 @@ import {
   enumerateTopPlans,
   estimateRisk,
   finalValidate,
+  reoptimizeWithMinimalChange,
   timeslotKey,
 } from "../../src/domain/selection-model/index.js";
 import type {
@@ -608,5 +609,124 @@ describe("TopN 候选枚举（Task 1 / C3.2）", () => {
       expect(candidate.volunteers.map((item) => item.sectionId)).not.toContain("sec-a-1");
       expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
     }
+  });
+});
+
+describe("最小扰动重排（Task 1 / C3.9）", () => {
+  it("从合法候选中选择相对当前方案变更最少的一份，并且变更集不包含锁定项", () => {
+    const sections = [
+      section({ sectionId: "sec-a-1", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-2", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-3", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-4", courseCode: "COURSE_A" }),
+    ];
+    const input = inputFor(sections, {
+      poolTargets: [
+        {
+          courseCode: "COURSE_A",
+          candidateSectionIds: ["sec-a-1", "sec-a-2", "sec-a-3", "sec-a-4"],
+        },
+      ],
+      lockedSectionIds: ["sec-a-1"],
+    });
+    const currentPlan = plan([
+      {
+        sectionId: "sec-a-1",
+        courseCode: "COURSE_A",
+        rank: 1,
+        groupId: "course:COURSE_A",
+        locked: true,
+      },
+      {
+        sectionId: "sec-a-2",
+        courseCode: "COURSE_A",
+        rank: 2,
+        groupId: "course:COURSE_A",
+        locked: false,
+      },
+      {
+        sectionId: "sec-a-3",
+        courseCode: "COURSE_A",
+        rank: 3,
+        groupId: "course:COURSE_A",
+        locked: false,
+      },
+    ]);
+
+    const { result, changeSet } = reoptimizeWithMinimalChange(input, currentPlan, [
+      {
+        groupId: "course:COURSE_A",
+        orderedSectionIds: ["sec-a-4", "sec-a-1", "sec-a-2", "sec-a-3"],
+      },
+    ]);
+
+    expect(result.kind).toBe("plans");
+    if (result.kind !== "plans") {
+      return;
+    }
+
+    expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]?.volunteers.map((item) => [item.sectionId, item.rank])).toEqual([
+      ["sec-a-1", 1],
+      ["sec-a-2", 2],
+      ["sec-a-3", 3],
+    ]);
+    expect(changeSet).toEqual({ added: [], removed: [], rankChanged: [] });
+    expect(finalValidate(input, result.plans[0] as CandidatePlan)).toEqual({ kind: "valid" });
+  });
+
+  it("无候选能保持锁定项顺位时返回锁定冲突来源", () => {
+    const sections = [
+      section({ sectionId: "sec-a-1", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-2", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-3", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-a-4", courseCode: "COURSE_A" }),
+    ];
+    const input = inputFor(sections, {
+      poolTargets: [
+        {
+          courseCode: "COURSE_A",
+          candidateSectionIds: ["sec-a-1", "sec-a-2", "sec-a-3", "sec-a-4"],
+        },
+      ],
+      lockedSectionIds: ["sec-a-1"],
+    });
+    const currentPlan = plan([
+      {
+        sectionId: "sec-a-2",
+        courseCode: "COURSE_A",
+        rank: 1,
+        groupId: "course:COURSE_A",
+        locked: false,
+      },
+      {
+        sectionId: "sec-a-1",
+        courseCode: "COURSE_A",
+        rank: 2,
+        groupId: "course:COURSE_A",
+        locked: true,
+      },
+      {
+        sectionId: "sec-a-3",
+        courseCode: "COURSE_A",
+        rank: 3,
+        groupId: "course:COURSE_A",
+        locked: false,
+      },
+    ]);
+
+    const { result, changeSet } = reoptimizeWithMinimalChange(input, currentPlan, [
+      {
+        groupId: "course:COURSE_A",
+        orderedSectionIds: ["sec-a-4", "sec-a-1", "sec-a-2", "sec-a-3"],
+      },
+    ]);
+
+    expect(result.kind).toBe("infeasible");
+    expect(changeSet).toBeNull();
+    expect(result.kind === "infeasible" ? result.conflicts[0] : null).toMatchObject({
+      errorCode: ErrorCodes.MODEL_LOCK_VIOLATION,
+      involvedSectionIds: ["sec-a-1"],
+    });
   });
 });
