@@ -15,10 +15,11 @@ import { db } from "../../app/db";
 const CONSENT_KEY = "privacy-consent.v1";
 
 export function ConsentGate({ children }: { children: ReactNode }) {
-  // useLiveQuery 初始返回 undefined = 加载中（docs/07 §4.5），必须显式处理。
-  const consent = useLiveQuery(() => db.kv.get(CONSENT_KEY), []);
+  // useLiveQuery 默认初始值也是 undefined；而 kv.get 不存在时也会返回 undefined。
+  // 用 null 作为加载态哨兵，避免首次用户永远停在“加载中…”。
+  const consent = useLiveQuery(() => db.kv.get(CONSENT_KEY), [], null);
 
-  if (consent === undefined) {
+  if (consent === null) {
     return <p className="p-8 text-gray-500">加载中…</p>;
   }
 
