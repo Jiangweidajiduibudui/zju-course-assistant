@@ -1,6 +1,8 @@
 import * as z from "zod";
+import { type Baseline, baselineSchema } from "../../../shared/contracts/baseline.js";
 import { type Catalog, catalogSchema } from "../../../shared/contracts/catalog.js";
 import { type ErrorCode, ErrorCodes } from "../../../shared/contracts/errors.js";
+import { type Pool, poolSchema } from "../../../shared/contracts/pool.js";
 import {
   type ExportEnvelope,
   exportEnvelopeSchema,
@@ -28,6 +30,12 @@ export type ImportResult = { ok: true; catalog: Catalog } | { ok: false; issues:
 export type ExportParseResult =
   | { ok: true; envelope: ExportEnvelope }
   | { ok: false; issues: ImportIssue[] };
+
+export type BaselineParseResult =
+  | { ok: true; baseline: Baseline }
+  | { ok: false; issues: ImportIssue[] };
+
+export type PoolParseResult = { ok: true; pool: Pool } | { ok: false; issues: ImportIssue[] };
 
 export type BundleParseResult =
   | {
@@ -95,68 +103,212 @@ export function parseExportEnvelopeJson(text: string): ExportParseResult {
   return { ok: true, envelope: parsed.data };
 }
 
-/**
- * 校验 session 内所有 sectionId 均存在于 catalog。
- * 覆盖 baseline.selected / baseline.volunteers / pool.targets / plan / history。
- */
-export function validateSessionSectionRefs(catalog: Catalog, session: Session): ImportIssue[] {
+/** 解析 baseline.v1（仅 Schema；section 引用需配合 catalog 校验） */
+export function parseBaselineJson(text: string): BaselineParseResult {
+  const json = parseJsonText(text);
+  if (!json.ok) {
+    return json;
+  }
+  const parsed = baselineSchema.safeParse(json.value);
+  if (!parsed.success) {
+    return { ok: false, issues: zodIssuesToImportIssues(parsed.error) };
+  }
+  return { ok: true, baseline: parsed.data };
+}
+
+/** 解析 pool.v1（仅 Schema；section/课程归属需配合 catalog 校验） */
+export function parsePoolJson(text: string): PoolParseResult {
+  const json = parseJsonText(text);
+  if (!json.ok) {
+    return json;
+  }
+  const parsed = poolSchema.safeParse(json.value);
+  if (!parsed.success) {
+    return { ok: false, issues: zodIssuesToImportIssues(parsed.error) };
+  }
+  return { ok: true, pool: parsed.data };
+}
+
+/** baseline 内 sectionId 必须存在于 catalog */
+export function validateBaselineSectionRefs(catalog: Catalog, baseline: Baseline): ImportIssue[] {
   const known = collectSectionIds(catalog);
   const issues: ImportIssue[] = [];
 
-  session.baseline.selected.forEach((sectionId, index) => {
+  baseline.selected.forEach((sectionId, index) => {
     if (!known.has(sectionId)) {
       issues.push({
-        path: `session.baseline.selected[${index}]`,
+        path: `baseline.selected[${index}]`,
         code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
         message: `未知教学班引用: ${sectionId}`,
       });
     }
   });
 
-  session.baseline.volunteers.forEach((volunteer, index) => {
+  baseline.volunteers.forEach((volunteer, index) => {
     if (!known.has(volunteer.sectionId)) {
       issues.push({
-        path: `session.baseline.volunteers[${index}].sectionId`,
+        path: `baseline.volunteers[${index}].sectionId`,
         code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
         message: `未知教学班引用: ${volunteer.sectionId}`,
       });
     }
   });
 
-  session.pool.targets.forEach((target, ti) => {
+  return issues;
+}
+
+/**
+ * pool 联检：
+ * 1) courseCode 必须存在于 catalog；
+ * 2) 候选 sectionId 必须存在；
+ * 3) 候选 section 必须属于该 courseCode（错挂课程 → UNKNOWN_SECTION_REF）。
+ */
+export function validatePoolSectionRefs(catalog: Catalog, pool: Pool): ImportIssue[] {
+  const sectionToCourse = collectSectionCourseMap(catalog);
+  const courseCodes = new Set(catalog.courses.map((course) => course.courseCode));
+  const issues: ImportIssue[] = [];
+
+  pool.targets.forEach((target, ti) => {
+    if (!courseCodes.has(target.courseCode)) {
+      issues.push({
+        path: `pool.targets[${ti}].courseCode`,
+        code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+        message: `未知课程引用: ${target.courseCode}`,
+      });
+    }
     target.candidateSectionIds.forEach((sectionId, si) => {
-      if (!known.has(sectionId)) {
+      const owner = sectionToCourse.get(sectionId);
+      if (!owner) {
         issues.push({
-          path: `session.pool.targets[${ti}].candidateSectionIds[${si}]`,
+          path: `pool.targets[${ti}].candidateSectionIds[${si}]`,
           code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
           message: `未知教学班引用: ${sectionId}`,
+        });
+        return;
+      }
+      if (owner !== target.courseCode) {
+        issues.push({
+          path: `pool.targets[${ti}].candidateSectionIds[${si}]`,
+          code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+          message: `教学班 ${sectionId} 属于课程 ${owner}，不属于 ${target.courseCode}`,
         });
       }
     });
   });
 
+  return issues;
+}
+
+/**
+ * 校验 session 内所有 sectionId 均存在于 catalog；
+ * pool 额外校验候选班课程归属。
+ */
+export function validateSessionSectionRefs(catalog: Catalog, session: Session): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+
+  for (const issue of validateBaselineSectionRefs(catalog, session.baseline)) {
+    issues.push({
+      ...issue,
+      path: issue.path.startsWith("baseline.")
+        ? `session.${issue.path}`
+        : `session.baseline.${issue.path}`,
+    });
+  }
+
+  for (const issue of validatePoolSectionRefs(catalog, session.pool)) {
+    issues.push({
+      ...issue,
+      path: issue.path.startsWith("pool.") ? `session.${issue.path}` : `session.pool.${issue.path}`,
+    });
+  }
+
+  const known = collectSectionIds(catalog);
   if (session.plan) {
     issues.push(...validatePlanSectionRefs(known, session.plan, "session.plan"));
   }
 
   session.history.forEach((entry, hi) => {
-    entry.pool.targets.forEach((target, ti) => {
-      target.candidateSectionIds.forEach((sectionId, si) => {
-        if (!known.has(sectionId)) {
-          issues.push({
-            path: `session.history[${hi}].pool.targets[${ti}].candidateSectionIds[${si}]`,
-            code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
-            message: `未知教学班引用: ${sectionId}`,
-          });
-        }
+    for (const issue of validatePoolSectionRefs(catalog, entry.pool)) {
+      const relative = issue.path.startsWith("pool.")
+        ? issue.path.slice("pool.".length)
+        : issue.path;
+      issues.push({
+        ...issue,
+        path: `session.history[${hi}].pool.${relative}`,
       });
-    });
+    }
     if (entry.plan) {
       issues.push(...validatePlanSectionRefs(known, entry.plan, `session.history[${hi}].plan`));
     }
   });
 
   return issues;
+}
+
+/** catalog + baseline 联检 */
+export function parseBaselineWithCatalog(
+  catalogJson: string,
+  baselineJson: string,
+):
+  | { ok: true; catalog: Catalog; baseline: Baseline; incompleteSectionIds: string[] }
+  | { ok: false; issues: ImportIssue[] } {
+  const catalogResult = parseCatalogJson(catalogJson);
+  if (!catalogResult.ok) {
+    return catalogResult;
+  }
+  const baselineResult = parseBaselineJson(baselineJson);
+  if (!baselineResult.ok) {
+    return {
+      ok: false,
+      issues: baselineResult.issues.map((issue) => ({
+        ...issue,
+        path: issue.path ? `baseline.${issue.path}` : "baseline",
+      })),
+    };
+  }
+  const refIssues = validateBaselineSectionRefs(catalogResult.catalog, baselineResult.baseline);
+  if (refIssues.length > 0) {
+    return { ok: false, issues: refIssues };
+  }
+  return {
+    ok: true,
+    catalog: catalogResult.catalog,
+    baseline: baselineResult.baseline,
+    incompleteSectionIds: listIncompleteSectionIds(catalogResult.catalog),
+  };
+}
+
+/** catalog + pool 联检（含课程归属） */
+export function parsePoolWithCatalog(
+  catalogJson: string,
+  poolJson: string,
+):
+  | { ok: true; catalog: Catalog; pool: Pool; incompleteSectionIds: string[] }
+  | { ok: false; issues: ImportIssue[] } {
+  const catalogResult = parseCatalogJson(catalogJson);
+  if (!catalogResult.ok) {
+    return catalogResult;
+  }
+  const poolResult = parsePoolJson(poolJson);
+  if (!poolResult.ok) {
+    return {
+      ok: false,
+      issues: poolResult.issues.map((issue) => ({
+        ...issue,
+        path: issue.path ? `pool.${issue.path}` : "pool",
+      })),
+    };
+  }
+  const refIssues = validatePoolSectionRefs(catalogResult.catalog, poolResult.pool);
+  if (refIssues.length > 0) {
+    return { ok: false, issues: refIssues };
+  }
+  return {
+    ok: true,
+    catalog: catalogResult.catalog,
+    pool: poolResult.pool,
+    incompleteSectionIds: listIncompleteSectionIds(catalogResult.catalog),
+  };
 }
 
 function validatePlanSectionRefs(
@@ -255,13 +407,18 @@ export function buildExportEnvelope(
 }
 
 function collectSectionIds(catalog: Catalog): Set<string> {
-  const ids = new Set<string>();
+  return new Set(collectSectionCourseMap(catalog).keys());
+}
+
+/** sectionId → 所属 courseCode */
+function collectSectionCourseMap(catalog: Catalog): Map<string, string> {
+  const map = new Map<string, string>();
   for (const course of catalog.courses) {
     for (const section of course.sections) {
-      ids.add(section.sectionId);
+      map.set(section.sectionId, course.courseCode);
     }
   }
-  return ids;
+  return map;
 }
 
 function findDuplicateSections(catalog: Catalog): ImportIssue[] {
@@ -297,4 +454,16 @@ export const exportEnvelopeRequestSchema = z.object({
 export const bundleRequestSchema = z.object({
   catalogJson: z.string().min(1),
   exportJson: z.string().min(1),
+});
+
+export const baselineRequestSchema = z.object({
+  baselineJson: z.string().min(1),
+  /** 提供则联检 section 引用 */
+  catalogJson: z.string().min(1).optional(),
+});
+
+export const poolRequestSchema = z.object({
+  poolJson: z.string().min(1),
+  /** 提供则联检 section 引用与课程归属 */
+  catalogJson: z.string().min(1).optional(),
 });

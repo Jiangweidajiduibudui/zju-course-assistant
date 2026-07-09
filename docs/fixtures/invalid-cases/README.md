@@ -9,6 +9,9 @@
 | `catalog-missing-schema-version.json` | `IMPORT_SCHEMA_MISMATCH` | 缺少 `schemaVersion` |
 | `catalog-empty-courses.json` | （当前 Schema 允许空 courses） | 保留样例：空目录可解析成功，供 UI 展示「无课程」 |
 | `export-unknown-section-ref.json` | `IMPORT_UNKNOWN_SECTION_REF` | pool 引用 catalog 中不存在的 `sectionId`（须与 demo-catalog 联检） |
+| `baseline-unknown-section.json` | `IMPORT_UNKNOWN_SECTION_REF` | baseline.selected 引用不存在的教学班（须与 demo-catalog 联检） |
+| `pool-section-wrong-course.json` | `IMPORT_UNKNOWN_SECTION_REF` | 候选班属于其他课程（须与 demo-catalog 联检） |
+| `pool-unknown-course.json` | `IMPORT_UNKNOWN_SECTION_REF` | pool.targets 引用不存在的 courseCode（须与 demo-catalog 联检） |
 
 约定：
 

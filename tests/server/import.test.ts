@@ -4,15 +4,17 @@ import { describe, expect, it } from "vitest";
 import {
   buildExportEnvelope,
   listIncompleteSectionIds,
+  parseBaselineWithCatalog,
   parseCatalogExportBundle,
   parseCatalogJson,
   parseExportEnvelopeJson,
+  parsePoolWithCatalog,
   validateSessionSectionRefs,
 } from "../../src/server/modules/import/service.js";
 import { ErrorCodes } from "../../src/shared/contracts/errors.js";
 import type { Catalog, Session } from "../../src/shared/contracts/index.js";
 
-/** 导入校验器（组员 A；docs/05 §1）：正常 / 非法 JSON / Schema / 重复 / 往返 / 未知引用。 */
+/** 导入校验器（组员 A；docs/05 §1）：catalog / export / baseline / pool / 往返。 */
 const FIXTURES = join(import.meta.dirname, "../../docs/fixtures");
 
 function readFixture(...segments: string[]): string {
@@ -203,5 +205,95 @@ describe("Task 2 门禁：导入→修改→导出→再导入", () => {
         true,
       );
     }
+  });
+});
+
+describe("baseline / pool 独立校验", () => {
+  it("合法 baseline + catalog 联检通过", () => {
+    const catalogJson = readFixture("demo-catalog.synthetic.json");
+    const baselineJson = JSON.stringify({
+      schemaVersion: "baseline.v1",
+      selected: ["SYN101-01"],
+      volunteers: [{ sectionId: "SYN201-01", rank: 1 }],
+      importedAt: "2026-07-09T12:00:00.000+08:00",
+    });
+    const result = parseBaselineWithCatalog(catalogJson, baselineJson);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.baseline.selected).toEqual(["SYN101-01"]);
+      expect(result.incompleteSectionIds).toContain("SYN301-01");
+    }
+  });
+
+  it("baseline 未知 section → IMPORT_UNKNOWN_SECTION_REF", () => {
+    const result = parseBaselineWithCatalog(
+      readFixture("demo-catalog.synthetic.json"),
+      readFixture("invalid-cases", "baseline-unknown-section.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_UNKNOWN_SECTION_REF)).toBe(
+        true,
+      );
+      expect(result.issues.some((i) => i.path.includes("baseline.selected"))).toBe(true);
+    }
+  });
+
+  it("合法 pool + catalog 联检通过", () => {
+    const catalogJson = readFixture("demo-catalog.synthetic.json");
+    const poolJson = JSON.stringify({
+      schemaVersion: "pool.v1",
+      targets: [
+        {
+          courseCode: "SYN101",
+          candidateSectionIds: ["SYN101-01", "SYN101-02"],
+        },
+      ],
+    });
+    const result = parsePoolWithCatalog(catalogJson, poolJson);
+    expect(result.ok).toBe(true);
+  });
+
+  it("候选班挂错课程 → IMPORT_UNKNOWN_SECTION_REF", () => {
+    const result = parsePoolWithCatalog(
+      readFixture("demo-catalog.synthetic.json"),
+      readFixture("invalid-cases", "pool-section-wrong-course.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_UNKNOWN_SECTION_REF)).toBe(
+        true,
+      );
+      expect(result.issues.some((i) => i.message.includes("不属于 SYN101"))).toBe(true);
+    }
+  });
+
+  it("未知 courseCode → IMPORT_UNKNOWN_SECTION_REF", () => {
+    const result = parsePoolWithCatalog(
+      readFixture("demo-catalog.synthetic.json"),
+      readFixture("invalid-cases", "pool-unknown-course.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.path.includes("courseCode"))).toBe(true);
+      expect(result.issues.some((i) => i.message.includes("NO-SUCH-COURSE"))).toBe(true);
+    }
+  });
+
+  it("session 联检也会拒绝挂错课程的 pool", () => {
+    const catalogResult = parseCatalogJson(readFixture("demo-catalog.synthetic.json"));
+    expect(catalogResult.ok).toBe(true);
+    if (!catalogResult.ok) {
+      return;
+    }
+    const session = buildDemoSession(catalogResult.catalog, {
+      pool: {
+        schemaVersion: "pool.v1",
+        targets: [{ courseCode: "SYN101", candidateSectionIds: ["SYN201-01"] }],
+      },
+    });
+    const issues = validateSessionSectionRefs(catalogResult.catalog, session);
+    expect(issues.some((i) => i.path.startsWith("session.pool."))).toBe(true);
+    expect(issues.some((i) => i.message.includes("不属于 SYN101"))).toBe(true);
   });
 });
