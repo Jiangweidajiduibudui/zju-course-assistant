@@ -93,6 +93,19 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByRole("heading", { name: /预期课表/ })).toBeVisible();
   await expect(page.getByText("等待 selection-model 输出")).toBeVisible();
 
+  await page.getByRole("button", { name: "设置" }).click();
+  await page.getByRole("button", { name: "清除全部本地数据（AC-11.3）" }).click();
+  await expect(page.getByRole("heading", { name: /首次使用：隐私声明/ })).toBeVisible();
+
+  await page.getByRole("button", { name: /同意并继续/ }).click();
+  await page.getByRole("button", { name: "导入/导出" }).click();
+  await expect(page.getByText("尚未加载课程数据")).toBeVisible();
+  await expect(page.getByText("当前 session 草稿")).toHaveCount(0);
+  await expect(page.getByText("JSON 导出预览（export.v1）")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText("尚未加载课程数据")).toBeVisible();
+  await expect(page.getByText("当前 session 草稿")).toHaveCount(0);
+
   expect(zdbkRequests).toEqual([]);
 });
 
