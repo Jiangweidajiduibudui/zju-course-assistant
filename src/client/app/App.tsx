@@ -1,9 +1,14 @@
+import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
+import type { Catalog, Session } from "../../shared/contracts/index.js";
 import { ImportExportPage } from "../features/import-export/ImportExportPage";
+import { buildDemoSessionDraft } from "../features/import-export/sessionDraft";
+import { updateSessionCreditLimit } from "../features/session/sessionRules";
 import { ConsentGate } from "../features/settings/ConsentGate";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { TimetablePage } from "../features/timetable-projection/TimetablePage";
 import { WishPlanPage } from "../features/wish-plan/WishPlanPage";
+import { clearAllLocalData, db } from "./db";
 
 /**
  * 应用外壳（组员 E）。
@@ -13,16 +18,75 @@ import { WishPlanPage } from "../features/wish-plan/WishPlanPage";
  * 暂不引入路由库（新增依赖须按 docs/07 §6 决策）。
  */
 const tabs = [
-  { id: "import", label: "导入/导出", node: <ImportExportPage /> },
-  { id: "wish", label: "待筛选志愿", node: <WishPlanPage /> },
-  { id: "timetable", label: "预期课表", node: <TimetablePage /> },
-  { id: "settings", label: "设置", node: <SettingsPage /> },
+  { id: "import", label: "导入/导出" },
+  { id: "wish", label: "待筛选志愿" },
+  { id: "timetable", label: "预期课表" },
+  { id: "settings", label: "设置" },
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
 
 export function App() {
   const [active, setActive] = useState<TabId>("import");
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const persistedSession = useLiveQuery(
+    async () => {
+      const sessions = await db.sessions.orderBy("createdAt").reverse().limit(1).toArray();
+      return sessions[0] ?? null;
+    },
+    [],
+    null,
+  );
+  const activeSession = session ?? persistedSession;
+
+  async function handleLoadDemoCatalog(nextCatalog: Catalog): Promise<void> {
+    const nextSession = buildDemoSessionDraft(nextCatalog);
+    await db.sessions.put(nextSession);
+    setCatalog(nextCatalog);
+    setSession(nextSession);
+  }
+
+  async function handleUpdateCreditLimit(creditLimit: number): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+    const nextSession = updateSessionCreditLimit(activeSession, creditLimit);
+    await db.sessions.put(nextSession);
+    setSession(nextSession);
+  }
+
+  async function handleClearAllLocalData(): Promise<void> {
+    await clearAllLocalData();
+    setCatalog(null);
+    setSession(null);
+  }
+
+  const activePage =
+    active === "import" ? (
+      <ImportExportPage
+        catalog={catalog}
+        session={activeSession}
+        onLoadDemoCatalog={handleLoadDemoCatalog}
+        onOpenTimetable={() => setActive("timetable")}
+        onOpenWishPlan={() => setActive("wish")}
+      />
+    ) : active === "wish" ? (
+      <WishPlanPage
+        catalog={catalog}
+        session={activeSession}
+        onOpenTimetable={() => setActive("timetable")}
+      />
+    ) : active === "timetable" ? (
+      <TimetablePage catalog={catalog} session={activeSession} />
+    ) : (
+      <SettingsPage
+        session={activeSession}
+        onUpdateCreditLimit={handleUpdateCreditLimit}
+        onClearAllLocalData={handleClearAllLocalData}
+      />
+    );
+
   return (
     <ConsentGate>
       <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -43,7 +107,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        {tabs.find((tab) => tab.id === active)?.node}
+        {activePage}
       </div>
     </ConsentGate>
   );

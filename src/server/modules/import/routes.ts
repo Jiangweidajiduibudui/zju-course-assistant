@@ -1,142 +1,298 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { ErrorCodes } from "../../../shared/contracts/errors.js";
 import { logEvent } from "../diagnostics/logger.js";
 import {
-  catalogImportRequestSchema,
-  exportImportRequestSchema,
-  exportSerializeRequestSchema,
-  type ImportIssue,
+  baselineRequestSchema,
+  bundleRequestSchema,
+  exportEnvelopeRequestSchema,
+  importRequestSchema,
+  listIncompleteSectionIds,
+  parseBaselineJson,
+  parseBaselineWithCatalog,
+  parseCatalogExportBundle,
   parseCatalogJson,
-  parseExportJson,
+  parseExportEnvelopeJson,
   parsePoolJson,
-  poolImportRequestSchema,
-  serializeExportEnvelope,
+  parsePoolWithCatalog,
+  poolRequestSchema,
+  validateSessionSectionRefs,
 } from "./service.js";
 
-function topLevelErrorCode(issues: ImportIssue[]) {
-  return issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH;
-}
-
-function sendIssues(reply: FastifyReply, issues: ImportIssue[]) {
-  return reply.code(422).send({
-    errorCode: topLevelErrorCode(issues),
-    message: "导入或导出数据未通过校验",
-    details: issues,
-  });
-}
-
-function logImportOperation(
-  request: FastifyRequest,
-  action: string,
-  started: number,
-  issues?: ImportIssue[],
-): void {
-  logEvent({
-    level: issues === undefined ? "info" : "warn",
-    requestId: request.id,
-    generationId: null,
-    module: "import",
-    action,
-    status: issues === undefined ? "ok" : "failed",
-    durationMs: Math.round(performance.now() - started),
-    errorCode: issues === undefined ? null : topLevelErrorCode(issues),
-  });
-}
-
-/** 无状态 JSON 导入/导出 API；请求载荷内容不会进入日志。 */
+/**
+ * import 模块路由（组员 A）。
+ * - POST /api/import/catalog —— 校验课程目录 JSON
+ * - POST /api/import/export-envelope —— 校验 export.v1（可选联检 catalog）
+ * - POST /api/import/bundle —— catalog + export 往返主路径
+ * - POST /api/import/baseline —— 校验 baseline.v1（可选联检 catalog）
+ * - POST /api/import/pool —— 校验 pool.v1（可选联检 catalog + 课程归属）
+ */
 export async function importRoutes(app: FastifyInstance): Promise<void> {
   app.post("/catalog", async (request, reply) => {
     const started = performance.now();
-    const body = catalogImportRequestSchema.safeParse(request.body);
+    const body = importRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({
         errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
-        message: "请求体不符合 catalogImportRequestSchema",
+        message: "请求体不符合 importRequestSchema",
         details: body.error.issues,
       });
     }
     const result = parseCatalogJson(body.data.catalogJson);
-    logImportOperation(request, "parse_catalog", started, result.ok ? undefined : result.issues);
+    logEvent({
+      level: result.ok ? "info" : "warn",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "parse_catalog",
+      status: result.ok ? "ok" : "failed",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+    });
     if (!result.ok) {
-      return sendIssues(reply, result.issues);
+      return reply.code(422).send({
+        errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "导入数据未通过校验",
+        details: result.issues,
+      });
     }
+    // 只回传摘要；完整数据由客户端 Dexie 持久化（服务端不保存用户规划数据，D04）。
     return reply.send({
       ok: true,
-      catalog: result.catalog,
       synthetic: result.catalog.synthetic,
       courseCount: result.catalog.courses.length,
-      sectionCount: result.catalog.courses.reduce(
-        (count, course) => count + course.sections.length,
-        0,
-      ),
+      sectionCount: result.catalog.courses.reduce((n, c) => n + c.sections.length, 0),
+      incompleteSectionIds: listIncompleteSectionIds(result.catalog),
+      catalog: result.catalog,
     });
+  });
+
+  app.post("/export-envelope", async (request, reply) => {
+    const started = performance.now();
+    const body = exportEnvelopeRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 exportEnvelopeRequestSchema",
+        details: body.error.issues,
+      });
+    }
+
+    const exportResult = parseExportEnvelopeJson(body.data.exportJson);
+    if (!exportResult.ok) {
+      logEvent({
+        level: "warn",
+        requestId: request.id,
+        generationId: null,
+        module: "import",
+        action: "parse_export_envelope",
+        status: "failed",
+        durationMs: Math.round(performance.now() - started),
+        errorCode: exportResult.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+      });
+      return reply.code(422).send({
+        errorCode: exportResult.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "导出信封未通过校验",
+        details: exportResult.issues,
+      });
+    }
+
+    if (body.data.catalogJson) {
+      const catalogResult = parseCatalogJson(body.data.catalogJson);
+      if (!catalogResult.ok) {
+        return reply.code(422).send({
+          errorCode: catalogResult.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+          message: "联检用 catalog 未通过校验",
+          details: catalogResult.issues,
+        });
+      }
+      const refIssues = validateSessionSectionRefs(
+        catalogResult.catalog,
+        exportResult.envelope.session,
+      );
+      if (refIssues.length > 0) {
+        return reply.code(422).send({
+          errorCode: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+          message: "session 引用了 catalog 中不存在的教学班",
+          details: refIssues,
+        });
+      }
+    }
+
+    logEvent({
+      level: "info",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "parse_export_envelope",
+      status: "ok",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: null,
+    });
+
+    return reply.send({
+      ok: true,
+      schemaVersion: exportResult.envelope.schemaVersion,
+      exportedAt: exportResult.envelope.exportedAt,
+      sessionId: exportResult.envelope.session.id,
+      envelope: exportResult.envelope,
+    });
+  });
+
+  app.post("/bundle", async (request, reply) => {
+    const started = performance.now();
+    const body = bundleRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 bundleRequestSchema",
+        details: body.error.issues,
+      });
+    }
+
+    const result = parseCatalogExportBundle(body.data.catalogJson, body.data.exportJson);
+    logEvent({
+      level: result.ok ? "info" : "warn",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "parse_bundle",
+      status: result.ok ? "ok" : "failed",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+    });
+
+    if (!result.ok) {
+      return reply.code(422).send({
+        errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "catalog + export 联检未通过",
+        details: result.issues,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      synthetic: result.catalog.synthetic,
+      incompleteSectionIds: result.incompleteSectionIds,
+      catalog: result.catalog,
+      envelope: result.envelope,
+    });
+  });
+
+  app.post("/baseline", async (request, reply) => {
+    const started = performance.now();
+    const body = baselineRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 baselineRequestSchema",
+        details: body.error.issues,
+      });
+    }
+
+    if (body.data.catalogJson) {
+      const result = parseBaselineWithCatalog(body.data.catalogJson, body.data.baselineJson);
+      logEvent({
+        level: result.ok ? "info" : "warn",
+        requestId: request.id,
+        generationId: null,
+        module: "import",
+        action: "parse_baseline",
+        status: result.ok ? "ok" : "failed",
+        durationMs: Math.round(performance.now() - started),
+        errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+      });
+      if (!result.ok) {
+        return reply.code(422).send({
+          errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+          message: "baseline 联检未通过",
+          details: result.issues,
+        });
+      }
+      return reply.send({
+        ok: true,
+        incompleteSectionIds: result.incompleteSectionIds,
+        baseline: result.baseline,
+        catalog: result.catalog,
+      });
+    }
+
+    const result = parseBaselineJson(body.data.baselineJson);
+    logEvent({
+      level: result.ok ? "info" : "warn",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "parse_baseline",
+      status: result.ok ? "ok" : "failed",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+    });
+    if (!result.ok) {
+      return reply.code(422).send({
+        errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "baseline 未通过校验",
+        details: result.issues,
+      });
+    }
+    return reply.send({ ok: true, baseline: result.baseline });
   });
 
   app.post("/pool", async (request, reply) => {
     const started = performance.now();
-    const body = poolImportRequestSchema.safeParse(request.body);
+    const body = poolRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({
         errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
-        message: "请求体不符合 poolImportRequestSchema",
+        message: "请求体不符合 poolRequestSchema",
         details: body.error.issues,
       });
     }
-    const catalogResult = parseCatalogJson(body.data.catalogJson);
-    if (!catalogResult.ok) {
-      logImportOperation(request, "parse_pool", started, catalogResult.issues);
-      return sendIssues(reply, catalogResult.issues);
-    }
-    const result = parsePoolJson(body.data.poolJson, catalogResult.catalog);
-    logImportOperation(request, "parse_pool", started, result.ok ? undefined : result.issues);
-    return result.ok
-      ? reply.send({ ok: true, pool: result.data })
-      : sendIssues(reply, result.issues);
-  });
 
-  app.post("/export/import", async (request, reply) => {
-    const started = performance.now();
-    const body = exportImportRequestSchema.safeParse(request.body);
-    if (!body.success) {
-      return reply.code(400).send({
-        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
-        message: "请求体不符合 exportImportRequestSchema",
-        details: body.error.issues,
+    if (body.data.catalogJson) {
+      const result = parsePoolWithCatalog(body.data.catalogJson, body.data.poolJson);
+      logEvent({
+        level: result.ok ? "info" : "warn",
+        requestId: request.id,
+        generationId: null,
+        module: "import",
+        action: "parse_pool",
+        status: result.ok ? "ok" : "failed",
+        durationMs: Math.round(performance.now() - started),
+        errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+      });
+      if (!result.ok) {
+        return reply.code(422).send({
+          errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+          message: "pool 联检未通过",
+          details: result.issues,
+        });
+      }
+      return reply.send({
+        ok: true,
+        incompleteSectionIds: result.incompleteSectionIds,
+        pool: result.pool,
+        catalog: result.catalog,
       });
     }
-    const catalogResult =
-      body.data.catalogJson === undefined ? undefined : parseCatalogJson(body.data.catalogJson);
-    if (catalogResult !== undefined && !catalogResult.ok) {
-      logImportOperation(request, "parse_export", started, catalogResult.issues);
-      return sendIssues(reply, catalogResult.issues);
-    }
-    const result = parseExportJson(body.data.exportJson, catalogResult?.catalog);
-    logImportOperation(request, "parse_export", started, result.ok ? undefined : result.issues);
-    return result.ok
-      ? reply.send({ ok: true, envelope: result.data })
-      : sendIssues(reply, result.issues);
-  });
 
-  app.post("/export", async (request, reply) => {
-    const started = performance.now();
-    const body = exportSerializeRequestSchema.safeParse(request.body);
-    if (!body.success) {
-      return reply.code(400).send({
-        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
-        message: "请求体不符合 exportSerializeRequestSchema",
-        details: body.error.issues,
+    const result = parsePoolJson(body.data.poolJson);
+    logEvent({
+      level: result.ok ? "info" : "warn",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "parse_pool",
+      status: result.ok ? "ok" : "failed",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+    });
+    if (!result.ok) {
+      return reply.code(422).send({
+        errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "pool 未通过校验",
+        details: result.issues,
       });
     }
-    const catalogResult =
-      body.data.catalogJson === undefined ? undefined : parseCatalogJson(body.data.catalogJson);
-    if (catalogResult !== undefined && !catalogResult.ok) {
-      logImportOperation(request, "serialize_export", started, catalogResult.issues);
-      return sendIssues(reply, catalogResult.issues);
-    }
-    const result = serializeExportEnvelope(body.data.envelope, catalogResult?.catalog);
-    logImportOperation(request, "serialize_export", started, result.ok ? undefined : result.issues);
-    return result.ok
-      ? reply.send({ ok: true, exportJson: result.data })
-      : sendIssues(reply, result.issues);
+    return reply.send({ ok: true, pool: result.pool });
   });
 }
