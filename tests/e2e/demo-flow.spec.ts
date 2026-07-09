@@ -63,6 +63,9 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByText("学分上限：18")).toBeVisible();
   await expect(page.getByText("JSON 导出预览（export.v1）")).toBeVisible();
   await expect(page.getByText("仅展示预览，不提供复制或下载按钮")).toBeVisible();
+  await expect(page.getByText("隐私提示：预览只包含当前 session 规划数据")).toBeVisible();
+  await expect(page.getByText("不包含 API key、Cookie、zdbk token 或学号姓名")).toBeVisible();
+  await expect(page.getByText("不会上传到服务端，也不会写入 zdbk")).toBeVisible();
   await expect(page.getByText('"schemaVersion": "export.v1"')).toBeVisible();
   await expect(page.getByText('"name": "合成 Demo session"')).toBeVisible();
   await expect(page.getByText('"creditLimit": 18')).toBeVisible();

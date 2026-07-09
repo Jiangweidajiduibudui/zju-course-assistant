@@ -105,6 +105,11 @@ export function ImportExportPage({
           <p className="mt-1 text-sm text-gray-600">
             仅展示预览，不提供复制或下载按钮。正式导出/再导入往返由后续 Task 2 接入。
           </p>
+          <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <p className="font-medium">隐私提示：预览只包含当前 session 规划数据。</p>
+            <p className="mt-1">不包含 API key、Cookie、zdbk token 或学号姓名。</p>
+            <p className="mt-1">不会上传到服务端，也不会写入 zdbk。</p>
+          </div>
           <pre className="mt-3 max-h-80 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-100">
             {exportPreview}
           </pre>
