@@ -19,7 +19,7 @@ export function buildVolunteerGroups(
 ): VolunteerGroup[] {
   const orderingByGroupId = new Map(groupOrderings.map((ordering) => [ordering.groupId, ordering]));
   const groups: VolunteerGroup[] = [];
-  const occupiedByCourseGroups = new Set<SectionId>();
+  const occupiedByCourseGroups = new Map<SectionId, string>();
 
   for (const target of input.pool.targets) {
     const candidateSectionIds = uniqueSectionIds(target.candidateSectionIds);
@@ -37,17 +37,17 @@ export function buildVolunteerGroups(
     });
 
     for (const sectionId of candidateSectionIds) {
-      occupiedByCourseGroups.add(sectionId);
+      occupiedByCourseGroups.set(sectionId, groupId);
     }
   }
 
   const timeslotCandidates = new Map<string, SectionId[]>();
+  const rawTimeslotCandidates = new Map<
+    string,
+    { sectionIds: SectionId[]; courseCodes: string[]; byCourseGroupIds: string[] }
+  >();
   for (const target of input.pool.targets) {
     for (const sectionId of target.candidateSectionIds) {
-      if (occupiedByCourseGroups.has(sectionId)) {
-        continue;
-      }
-
       const section = input.sections.get(sectionId);
       if (!section) {
         continue;
@@ -55,13 +55,59 @@ export function buildVolunteerGroups(
 
       for (const slot of section.slots) {
         const key = timeslotKey(slot);
-        const current = timeslotCandidates.get(key) ?? [];
-        if (!current.includes(sectionId)) {
-          current.push(sectionId);
-          timeslotCandidates.set(key, current);
+        const raw = rawTimeslotCandidates.get(key) ?? {
+          sectionIds: [],
+          courseCodes: [],
+          byCourseGroupIds: [],
+        };
+        if (!raw.sectionIds.includes(sectionId)) {
+          raw.sectionIds.push(sectionId);
         }
+        if (!raw.courseCodes.includes(section.courseCode)) {
+          raw.courseCodes.push(section.courseCode);
+        }
+
+        const courseGroupId = occupiedByCourseGroups.get(sectionId);
+        if (courseGroupId) {
+          if (!raw.byCourseGroupIds.includes(courseGroupId)) {
+            raw.byCourseGroupIds.push(courseGroupId);
+          }
+          rawTimeslotCandidates.set(key, raw);
+          continue;
+        }
+
+        const active = timeslotCandidates.get(key) ?? [];
+        if (!active.includes(sectionId)) {
+          active.push(sectionId);
+          timeslotCandidates.set(key, active);
+        }
+        rawTimeslotCandidates.set(key, raw);
       }
     }
+  }
+
+  for (const [key, raw] of rawTimeslotCandidates) {
+    const activeCandidateCount = timeslotCandidates.get(key)?.length ?? 0;
+    if (
+      raw.sectionIds.length < 2 ||
+      raw.courseCodes.length < 2 ||
+      raw.byCourseGroupIds.length === 0 ||
+      activeCandidateCount >= 2
+    ) {
+      continue;
+    }
+
+    const groupId = timeslotGroupId(key);
+    groups.push({
+      groupId,
+      kind: "timeslot",
+      ref: key,
+      orderedSectionIds: pickTopThree(raw.sectionIds, orderingByGroupId.get(groupId)),
+      invalidated: {
+        reason: "时间槽组包含已进入课程志愿组的教学班，按课程组优先规则失效",
+        byGroupId: raw.byCourseGroupIds[0] ?? null,
+      },
+    });
   }
 
   for (const [key, candidateSectionIds] of timeslotCandidates) {

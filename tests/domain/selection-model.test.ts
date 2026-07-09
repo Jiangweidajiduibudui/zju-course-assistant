@@ -442,3 +442,44 @@ describe("志愿组 Top3 与候选枚举（Task 1 / C2）", () => {
     });
   });
 });
+
+describe("课程组优先与时间槽组失效（Task 1 / C3.1）", () => {
+  it("课程志愿组占用某个时间槽时，返回带原因的失效时间槽组供 UI 解释", () => {
+    const sharedSlot: TermSlot = { term: "autumn", dayOfWeek: 1, period: 1 };
+    const sections = [
+      section({ sectionId: "sec-a-1", courseCode: "COURSE_A", slots: [sharedSlot] }),
+      section({
+        sectionId: "sec-a-2",
+        courseCode: "COURSE_A",
+        slots: [{ term: "autumn", dayOfWeek: 2, period: 1 }],
+      }),
+      section({ sectionId: "sec-b-1", courseCode: "COURSE_B", slots: [sharedSlot] }),
+    ];
+    const input = inputFor(sections, {
+      poolTargets: [
+        { courseCode: "COURSE_A", candidateSectionIds: ["sec-a-1", "sec-a-2"] },
+        { courseCode: "COURSE_B", candidateSectionIds: ["sec-b-1"] },
+      ],
+    });
+
+    const groups = buildVolunteerGroups(input);
+
+    expect(groups).toContainEqual({
+      groupId: "course:COURSE_A",
+      kind: "course",
+      ref: "COURSE_A",
+      orderedSectionIds: ["sec-a-1", "sec-a-2"],
+      invalidated: null,
+    });
+    expect(groups).toContainEqual({
+      groupId: "timeslot:autumn-1-1",
+      kind: "timeslot",
+      ref: "autumn-1-1",
+      orderedSectionIds: ["sec-a-1", "sec-b-1"],
+      invalidated: {
+        reason: "时间槽组包含已进入课程志愿组的教学班，按课程组优先规则失效",
+        byGroupId: "course:COURSE_A",
+      },
+    });
+  });
+});
