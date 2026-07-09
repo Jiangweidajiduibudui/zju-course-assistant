@@ -1,4 +1,5 @@
-import type { Catalog } from "../../../shared/contracts/index.js";
+import type { Catalog, Session } from "../../../shared/contracts/index.js";
+import { countSessionPoolSections } from "../session/sessionSummary";
 
 /**
  * 待筛选志愿页（组员 E；docs/08 §8.1 —— zdbk 心智模型）。
@@ -13,11 +14,13 @@ import type { Catalog } from "../../../shared/contracts/index.js";
  */
 interface WishPlanPageProps {
   catalog: Catalog | null;
+  session: Session | null;
   onOpenTimetable: () => void;
 }
 
-export function WishPlanPage({ catalog, onOpenTimetable }: WishPlanPageProps) {
+export function WishPlanPage({ catalog, session, onOpenTimetable }: WishPlanPageProps) {
   const sections = catalog?.courses.flatMap((course) => course.sections) ?? [];
+  const candidateCount = session ? countSessionPoolSections(session) : sections.length;
 
   return (
     <section className="space-y-4 p-6">
@@ -25,14 +28,18 @@ export function WishPlanPage({ catalog, onOpenTimetable }: WishPlanPageProps) {
       <p className="mt-2 text-sm text-gray-500">
         课程志愿组 / 时间槽志愿组 / 顺位调整 / 失效原因说明 —— 见 docs/08 §8.1。
       </p>
-      {catalog ? (
+      {session ? (
         <div className="space-y-3">
           <div className="rounded-lg border bg-white p-4">
             <p className="font-semibold">尚未生成推荐</p>
+            <p className="mt-1 text-sm text-gray-600">Session 草稿：{session.name}</p>
             <p className="mt-1 text-sm text-gray-600">
-              已接入合成 Demo catalog（{sections.length}{" "}
-              个教学班）。真正的课程志愿组、时间槽志愿组、 锁定和重新优化将由 selection-model 与
-              Task 5 接入；本页当前只展示主线骨架。
+              待选池目标：{session.pool.targets.length} 门课程
+            </p>
+            <p className="mt-1 text-sm text-gray-600">候选教学班总数：{candidateCount}</p>
+            <p className="mt-1 text-sm text-gray-600">
+              真正的课程志愿组、时间槽志愿组、锁定和重新优化将由 selection-model 与 Task 5
+              接入；本页当前只展示主线骨架。
             </p>
             <button
               type="button"
@@ -42,16 +49,30 @@ export function WishPlanPage({ catalog, onOpenTimetable }: WishPlanPageProps) {
               查看预期课表
             </button>
           </div>
-          <ul className="grid gap-2 md:grid-cols-2">
-            {catalog.courses.map((course) => (
-              <li key={course.courseCode} className="rounded-lg border bg-white p-3 text-sm">
-                <div className="font-medium">{course.courseName}</div>
-                <div className="text-gray-500">
-                  候选教学班：{course.sections.map((section) => section.sectionId).join(" / ")}
-                </div>
-              </li>
-            ))}
-          </ul>
+
+          {catalog ? (
+            <ul className="grid gap-2 md:grid-cols-2">
+              {catalog.courses.map((course) => (
+                <li key={course.courseCode} className="rounded-lg border bg-white p-3 text-sm">
+                  <div className="font-medium">{course.courseName}</div>
+                  <div className="text-gray-500">
+                    候选教学班：{course.sections.map((section) => section.sectionId).join(" / ")}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="grid gap-2 md:grid-cols-2">
+              {session.pool.targets.map((target) => (
+                <li key={target.courseCode} className="rounded-lg border bg-white p-3 text-sm">
+                  <div className="font-medium">{target.courseCode}</div>
+                  <div className="text-gray-500">
+                    候选教学班：{target.candidateSectionIds.join(" / ")}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ) : (
         <p className="rounded-lg border bg-white p-4 text-sm text-gray-600">

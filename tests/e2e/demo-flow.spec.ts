@@ -33,10 +33,21 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByText("合成微积分演示")).toBeVisible();
   await expect(page.getByText("考试时间缺失")).toBeVisible();
   await expect(page.getByText("学分缺失")).toBeVisible();
+  await expect(page.getByText("当前 session 草稿")).toBeVisible();
+  await expect(page.getByText("合成 Demo session")).toBeVisible();
+  await expect(page.getByText("待选池：3 门课程 / 5 个候选教学班")).toBeVisible();
+  await expect(page.getByText("学分上限：未填写")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("当前 session 草稿")).toBeVisible();
+  await expect(page.getByText("待选池：3 门课程 / 5 个候选教学班")).toBeVisible();
 
   await page.getByRole("button", { name: "进入待筛选志愿" }).click();
   await expect(page.getByRole("heading", { name: /待筛选志愿/ })).toBeVisible();
   await expect(page.getByText("尚未生成推荐")).toBeVisible();
+  await expect(page.getByText("Session 草稿：合成 Demo session")).toBeVisible();
+  await expect(page.getByText("待选池目标：3 门课程")).toBeVisible();
+  await expect(page.getByText("候选教学班总数：5")).toBeVisible();
 
   await page.getByRole("button", { name: "查看预期课表" }).click();
   await expect(page.getByRole("heading", { name: /预期课表/ })).toBeVisible();

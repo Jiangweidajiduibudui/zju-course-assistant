@@ -1,4 +1,5 @@
-import type { Catalog, Section } from "../../../shared/contracts/index.js";
+import type { Catalog, Section, Session } from "../../../shared/contracts/index.js";
+import { countSessionPoolSections } from "../session/sessionSummary";
 import { getSyntheticDemoCatalog } from "./demoCatalog";
 
 /**
@@ -12,7 +13,8 @@ import { getSyntheticDemoCatalog } from "./demoCatalog";
  */
 interface ImportExportPageProps {
   catalog: Catalog | null;
-  onLoadDemoCatalog: (catalog: Catalog) => void;
+  session: Session | null;
+  onLoadDemoCatalog: (catalog: Catalog) => void | Promise<void>;
   onOpenTimetable: () => void;
   onOpenWishPlan: () => void;
 }
@@ -33,6 +35,7 @@ function sectionStatus(section: Section): string[] {
 
 export function ImportExportPage({
   catalog,
+  session,
   onLoadDemoCatalog,
   onOpenTimetable,
   onOpenWishPlan,
@@ -55,11 +58,44 @@ export function ImportExportPage({
         <button
           type="button"
           className="mt-3 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white"
-          onClick={() => onLoadDemoCatalog(getSyntheticDemoCatalog())}
+          onClick={() => void onLoadDemoCatalog(getSyntheticDemoCatalog())}
         >
           加载合成 Demo 数据
         </button>
       </div>
+
+      {session ? (
+        <div className="rounded-lg border bg-white p-4">
+          <p className="text-sm font-semibold text-indigo-700">当前 session 草稿</p>
+          <h3 className="mt-1 font-semibold">{session.name}</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            待选池：{session.pool.targets.length} 门课程 / {countSessionPoolSections(session)}{" "}
+            个候选教学班
+          </p>
+          <p className="mt-1 text-sm text-gray-600">
+            学分上限：{session.rules.creditLimit ?? "未填写"}
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            baseline 从本次合成导入创建；当前 plan 为空，等待 selection-model 输出。
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded bg-gray-900 px-3 py-2 text-sm text-white"
+              onClick={onOpenWishPlan}
+            >
+              进入待筛选志愿
+            </button>
+            <button
+              type="button"
+              className="rounded border border-gray-300 px-3 py-2 text-sm"
+              onClick={onOpenTimetable}
+            >
+              查看预期课表
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {catalog ? (
         <div className="space-y-4">
@@ -69,22 +105,6 @@ export function ImportExportPage({
               已加载 {catalog.courses.length} 门课程 / {sections.length} 个教学班；生成时间：
               {catalog.generatedAt}
             </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="rounded bg-gray-900 px-3 py-2 text-sm text-white"
-                onClick={onOpenWishPlan}
-              >
-                进入待筛选志愿
-              </button>
-              <button
-                type="button"
-                className="rounded border border-gray-300 px-3 py-2 text-sm"
-                onClick={onOpenTimetable}
-              >
-                查看预期课表
-              </button>
-            </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
