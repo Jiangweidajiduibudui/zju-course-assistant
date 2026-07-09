@@ -2,7 +2,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ServerConfig } from "./config.js";
-import { chalaoshiRoutes } from "./modules/chalaoshi/routes.js";
+import { buildChalaoshiRoutes } from "./modules/chalaoshi/routes.js";
 import { diagnosticsRoutes } from "./modules/diagnostics/routes.js";
 import { importRoutes } from "./modules/import/routes.js";
 import { llmGatewayRoutes } from "./modules/llm-gateway/routes.js";
@@ -32,7 +32,7 @@ export async function buildApp(config: ServerConfig): Promise<FastifyInstance> {
   app.get("/api/health", async () => ({ status: "ok" as const }));
 
   await app.register(importRoutes, { prefix: "/api/import" });
-  await app.register(chalaoshiRoutes, { prefix: "/api/chalaoshi" });
+  await app.register(buildChalaoshiRoutes(config), { prefix: "/api/chalaoshi" });
   await app.register(llmGatewayRoutes, { prefix: "/api/llm" });
   await app.register(plannerRoutes, { prefix: "/api/planner" });
   await app.register(diagnosticsRoutes, { prefix: "/api/diagnostics" });
