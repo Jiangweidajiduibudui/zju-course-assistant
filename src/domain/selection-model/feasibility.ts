@@ -1,4 +1,5 @@
-import { NotImplementedError } from "./errors.js";
+import { ErrorCodes } from "../../shared/contracts/errors.js";
+import type { SectionId } from "../../shared/contracts/index.js";
 import type { SchedulabilityResult, SolverInput } from "./types.js";
 
 /**
@@ -13,6 +14,57 @@ import type { SchedulabilityResult, SolverInput } from "./types.js";
  *
  * Task 1 交付；测试锚点：tests/domain/feasibility.test.ts。
  */
-export function assessSchedulability(_input: SolverInput): SchedulabilityResult {
-  throw new NotImplementedError("assessSchedulability", "Task 1");
+export function assessSchedulability(input: SolverInput): SchedulabilityResult {
+  const candidateSectionIds = collectPoolSectionIds(input);
+
+  if (input.rules.creditLimit === null) {
+    return {
+      schedulable: [],
+      excluded: candidateSectionIds.map((sectionId) => ({
+        sectionId,
+        reasonCode: ErrorCodes.MODEL_CREDIT_LIMIT_MISSING,
+      })),
+    };
+  }
+
+  const schedulable: SectionId[] = [];
+  const excluded: SchedulabilityResult["excluded"] = [];
+
+  for (const sectionId of candidateSectionIds) {
+    const section = input.sections.get(sectionId);
+    if (!section) {
+      excluded.push({ sectionId, reasonCode: ErrorCodes.MODEL_SECTION_NOT_IN_POOL });
+      continue;
+    }
+
+    if (section.examTime === null) {
+      excluded.push({ sectionId, reasonCode: ErrorCodes.MODEL_MISSING_EXAM_TIME });
+      continue;
+    }
+
+    if (section.credits === null) {
+      excluded.push({ sectionId, reasonCode: ErrorCodes.MODEL_MISSING_CREDIT });
+      continue;
+    }
+
+    schedulable.push(sectionId);
+  }
+
+  return { schedulable, excluded };
+}
+
+function collectPoolSectionIds(input: SolverInput): SectionId[] {
+  const seen = new Set<SectionId>();
+  const sectionIds: SectionId[] = [];
+
+  for (const target of input.pool.targets) {
+    for (const sectionId of target.candidateSectionIds) {
+      if (!seen.has(sectionId)) {
+        seen.add(sectionId);
+        sectionIds.push(sectionId);
+      }
+    }
+  }
+
+  return sectionIds;
 }

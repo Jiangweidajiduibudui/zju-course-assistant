@@ -1,5 +1,13 @@
-import type { CandidatePlan } from "../../shared/contracts/index.js";
-import { NotImplementedError } from "./errors.js";
+import {
+  type CandidatePlan,
+  type ConflictReport,
+  type CourseCode,
+  candidatePlanSchema,
+  type ErrorCode,
+  ErrorCodes,
+  type Section,
+  type SectionId,
+} from "../../shared/contracts/index.js";
 import type { SolverInput, ValidationResult } from "./types.js";
 
 /**
@@ -20,6 +28,340 @@ import type { SolverInput, ValidationResult } from "./types.js";
  * Task 1 交付（Task 4 前必须可被 planner 调用）；
  * 测试锚点：tests/domain/validate.test.ts + properties.test.ts。
  */
-export function finalValidate(_input: SolverInput, _plan: CandidatePlan): ValidationResult {
-  throw new NotImplementedError("finalValidate", "Task 1");
+export function finalValidate(input: SolverInput, plan: CandidatePlan): ValidationResult {
+  const schemaResult = candidatePlanSchema.safeParse(plan);
+  if (!schemaResult.success) {
+    return {
+      kind: "invalid",
+      conflicts: [
+        conflict(
+          ErrorCodes.COMMON_VALIDATION_FAILED,
+          [],
+          [],
+          "候选方案不符合 candidatePlan.v1 基础结构",
+        ),
+      ],
+    };
+  }
+
+  if (input.rules.creditLimit === null) {
+    return {
+      kind: "invalid",
+      conflicts: [
+        conflict(
+          ErrorCodes.MODEL_CREDIT_LIMIT_MISSING,
+          [],
+          [],
+          "用户尚未填写必需的学分上限，不能生成方案",
+        ),
+      ],
+    };
+  }
+
+  const conflicts: ConflictReport[] = [];
+  const poolSectionIds = collectPoolSectionIdSet(input);
+  const planSectionIds = new Set<SectionId>();
+  const sectionsInPlan: Section[] = [];
+
+  for (const volunteer of plan.volunteers) {
+    planSectionIds.add(volunteer.sectionId);
+    const section = input.sections.get(volunteer.sectionId);
+
+    if (!section || !poolSectionIds.has(volunteer.sectionId)) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_SECTION_NOT_IN_POOL,
+          [volunteer.sectionId],
+          section ? [section.courseCode] : [volunteer.courseCode],
+          "方案包含不在用户待选池内的教学班",
+        ),
+      );
+      continue;
+    }
+
+    if (section.courseCode !== volunteer.courseCode) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.COMMON_VALIDATION_FAILED,
+          [volunteer.sectionId],
+          [section.courseCode],
+          "方案中的课程代码与教学班目录不一致",
+        ),
+      );
+    }
+
+    sectionsInPlan.push(section);
+  }
+
+  conflicts.push(...validatePoolCoverage(input, planSectionIds));
+  conflicts.push(...validateLocks(input, plan));
+  conflicts.push(...validateGroupRanks(plan));
+
+  const sectionsForHardChecks = collectSectionsForHardChecks(input, sectionsInPlan);
+  conflicts.push(...validateHardFields(sectionsForHardChecks));
+  conflicts.push(...validateCreditLimit(sectionsForHardChecks, input.rules.creditLimit));
+  conflicts.push(...validateExamConflicts(sectionsForHardChecks));
+
+  return conflicts.length > 0 ? { kind: "invalid", conflicts } : { kind: "valid" };
+}
+
+function collectSectionsForHardChecks(
+  input: SolverInput,
+  sectionsInPlan: readonly Section[],
+): Section[] {
+  const sections = [...sectionsInPlan];
+  const seenSectionIds = new Set(sectionsInPlan.map((section) => section.sectionId));
+
+  for (const selectedSectionId of input.baseline.selected) {
+    if (seenSectionIds.has(selectedSectionId)) {
+      continue;
+    }
+
+    const selectedSection = input.sections.get(selectedSectionId);
+    if (selectedSection) {
+      sections.push(selectedSection);
+      seenSectionIds.add(selectedSectionId);
+    }
+  }
+
+  return sections;
+}
+
+function collectPoolSectionIdSet(input: SolverInput): Set<SectionId> {
+  const sectionIds = new Set<SectionId>();
+
+  for (const target of input.pool.targets) {
+    for (const sectionId of target.candidateSectionIds) {
+      sectionIds.add(sectionId);
+    }
+  }
+
+  return sectionIds;
+}
+
+function validatePoolCoverage(
+  input: SolverInput,
+  planSectionIds: ReadonlySet<SectionId>,
+): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+
+  for (const target of input.pool.targets) {
+    const hasAnyCandidate = target.candidateSectionIds.some((sectionId) =>
+      planSectionIds.has(sectionId),
+    );
+    if (!hasAnyCandidate) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_NO_FEASIBLE_PLAN,
+          [],
+          [target.courseCode],
+          "方案没有覆盖待选池目标课程",
+        ),
+      );
+    }
+  }
+
+  return conflicts;
+}
+
+function validateLocks(input: SolverInput, plan: CandidatePlan): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+  const volunteersBySectionId = new Map(
+    plan.volunteers.map((volunteer) => [volunteer.sectionId, volunteer]),
+  );
+
+  for (const baselineVolunteer of input.baseline.volunteers) {
+    const planVolunteer = volunteersBySectionId.get(baselineVolunteer.sectionId);
+    if (!planVolunteer || planVolunteer.rank !== baselineVolunteer.rank) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_LOCK_VIOLATION,
+          [baselineVolunteer.sectionId],
+          courseCodesFor(input, [baselineVolunteer.sectionId]),
+          "已填志愿的教学班与顺位必须保持不变",
+        ),
+      );
+    }
+  }
+
+  for (const lockedSectionId of input.lockedSectionIds) {
+    const planVolunteer = volunteersBySectionId.get(lockedSectionId);
+    if (!planVolunteer) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_LOCK_VIOLATION,
+          [lockedSectionId],
+          courseCodesFor(input, [lockedSectionId]),
+          "手动锁定的教学班必须保留在方案中",
+        ),
+      );
+    }
+  }
+
+  return conflicts;
+}
+
+function validateGroupRanks(plan: CandidatePlan): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+  const groupById = new Map(plan.groups.map((group) => [group.groupId, group]));
+  const volunteersByGroup = new Map<string, CandidatePlan["volunteers"]>();
+
+  for (const volunteer of plan.volunteers) {
+    const current = volunteersByGroup.get(volunteer.groupId) ?? [];
+    current.push(volunteer);
+    volunteersByGroup.set(volunteer.groupId, current);
+  }
+
+  for (const [groupId, volunteers] of volunteersByGroup) {
+    const rankSet = new Set(volunteers.map((volunteer) => volunteer.rank));
+    const group = groupById.get(groupId);
+    const errorCode =
+      group?.kind === "timeslot"
+        ? ErrorCodes.MODEL_VOLUNTEER_LIMIT_TIMESLOT
+        : ErrorCodes.MODEL_VOLUNTEER_LIMIT_COURSE;
+
+    if (volunteers.length > 3 || rankSet.size !== volunteers.length) {
+      conflicts.push(
+        conflict(
+          errorCode,
+          volunteers.map((volunteer) => volunteer.sectionId),
+          volunteers.map((volunteer) => volunteer.courseCode),
+          "志愿组最多 3 个教学班，且组内顺位不能重复",
+        ),
+      );
+    }
+  }
+
+  return conflicts;
+}
+
+function validateHardFields(sections: readonly Section[]): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+
+  for (const section of sections) {
+    if (section.examTime === null) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_MISSING_EXAM_TIME,
+          [section.sectionId],
+          [section.courseCode],
+          "考试时间缺失的教学班不能进入方案",
+        ),
+      );
+    }
+
+    if (section.credits === null) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_MISSING_CREDIT,
+          [section.sectionId],
+          [section.courseCode],
+          "学分缺失的教学班不能进入方案",
+        ),
+      );
+    }
+  }
+
+  return conflicts;
+}
+
+function validateCreditLimit(sections: readonly Section[], creditLimit: number): ConflictReport[] {
+  const creditsByCourse = new Map<
+    CourseCode,
+    { sectionIds: SectionId[]; credits: number | null }
+  >();
+
+  for (const section of sections) {
+    const current = creditsByCourse.get(section.courseCode);
+    if (current) {
+      current.sectionIds.push(section.sectionId);
+      if (current.credits === null) {
+        current.credits = section.credits;
+      }
+      continue;
+    }
+
+    creditsByCourse.set(section.courseCode, {
+      sectionIds: [section.sectionId],
+      credits: section.credits,
+    });
+  }
+
+  let totalCredits = 0;
+  const involvedSectionIds: SectionId[] = [];
+  const involvedCourseCodes: CourseCode[] = [];
+
+  for (const [courseCode, entry] of creditsByCourse) {
+    if (entry.credits === null) {
+      continue;
+    }
+
+    totalCredits += entry.credits;
+    involvedSectionIds.push(...entry.sectionIds);
+    involvedCourseCodes.push(courseCode);
+  }
+
+  if (totalCredits <= creditLimit) {
+    return [];
+  }
+
+  return [
+    conflict(
+      ErrorCodes.MODEL_CREDIT_LIMIT_EXCEEDED,
+      involvedSectionIds,
+      involvedCourseCodes,
+      `方案总学分 ${totalCredits} 超过用户上限 ${creditLimit}`,
+    ),
+  ];
+}
+
+function validateExamConflicts(sections: readonly Section[]): ConflictReport[] {
+  const conflicts: ConflictReport[] = [];
+  const examSlots = new Map<string, Section>();
+
+  for (const section of sections) {
+    if (section.examTime === null) {
+      continue;
+    }
+
+    const existing = examSlots.get(section.examTime.examKey);
+    if (!existing) {
+      examSlots.set(section.examTime.examKey, section);
+      continue;
+    }
+
+    if (existing.courseCode !== section.courseCode) {
+      conflicts.push(
+        conflict(
+          ErrorCodes.MODEL_EXAM_CONFLICT,
+          [existing.sectionId, section.sectionId],
+          [existing.courseCode, section.courseCode],
+          "不同课程存在同一考试时间硬冲突",
+        ),
+      );
+    }
+  }
+
+  return conflicts;
+}
+
+function courseCodesFor(input: SolverInput, sectionIds: readonly SectionId[]): CourseCode[] {
+  return sectionIds.flatMap((sectionId) => {
+    const section = input.sections.get(sectionId);
+    return section ? [section.courseCode] : [];
+  });
+}
+
+function conflict(
+  errorCode: ErrorCode,
+  involvedSectionIds: SectionId[],
+  involvedCourseCodes: CourseCode[],
+  description: string,
+): ConflictReport {
+  return {
+    errorCode,
+    involvedSectionIds: [...new Set(involvedSectionIds)],
+    involvedCourseCodes: [...new Set(involvedCourseCodes)],
+    description,
+  };
 }
