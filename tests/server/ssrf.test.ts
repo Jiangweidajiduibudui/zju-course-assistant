@@ -30,17 +30,65 @@ describe("checkEndpointUrl（URL 形态检查）", () => {
     expect(checkEndpointUrl("https://api.example.com/v1").allowed).toBe(true);
   });
 
-  it.todo("拒绝 localhost / 127.0.0.1 / [::1] 字面量（Task 4）");
-  it.todo("拒绝私网 10.x / 172.16-31.x / 192.168.x 字面量（Task 4）");
-  it.todo("拒绝 IPv4 十进制/八进制/十六进制混合写法绕过（Task 4）");
+  it.each([
+    "https://localhost/v1",
+    "https://foo.localhost/v1",
+    "https://127.0.0.1/v1",
+    "https://[::1]/v1",
+  ])("拒绝 localhost / loopback 字面量：%s", (url) => {
+    const verdict = checkEndpointUrl(url);
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.errorCode).toBe(ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF);
+  });
+
+  it.each([
+    "https://10.1.2.3/v1",
+    "https://172.16.0.1/v1",
+    "https://172.31.255.255/v1",
+    "https://192.168.1.1/v1",
+    "https://169.254.1.1/v1",
+  ])("拒绝私网 / link-local IPv4 字面量：%s", (url) => {
+    const verdict = checkEndpointUrl(url);
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.errorCode).toBe(ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF);
+  });
+
+  it.each([
+    "https://0177.0.0.1/v1",
+    "https://0x7f.0x0.0x0.0x1/v1",
+    "https://2130706433/v1",
+  ])("拒绝 IPv4 十进制/八进制/十六进制混合写法绕过：%s", (url) => {
+    const verdict = checkEndpointUrl(url);
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.errorCode).toBe(ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF);
+  });
 });
 
 describe("assertResolvedAddressAllowed（DNS 复查）", () => {
-  it("未实现前默认拒绝（fail-closed）", () => {
-    expect(assertResolvedAddressAllowed("93.184.216.34").allowed).toBe(false);
+  it.each(["93.184.216.34", "8.8.8.8", "2001:4860:4860::8888"])("放行公网 IP：%s", (ip) => {
+    expect(assertResolvedAddressAllowed(ip)).toEqual({ allowed: true });
   });
 
-  it.todo("放行公网 IP、拒绝私网/回环/link-local/reserved（IPv4+IPv6，Task 4）");
+  it.each([
+    "127.0.0.1",
+    "10.0.0.1",
+    "172.16.0.1",
+    "192.168.0.1",
+    "169.254.10.20",
+    "0.0.0.0",
+    "224.0.0.1",
+    "::1",
+    "::",
+    "fd00::1",
+    "fe80::1",
+    "ff02::1",
+    "2001:db8::1",
+  ])("拒绝私网/回环/link-local/reserved IP：%s", (ip) => {
+    const verdict = assertResolvedAddressAllowed(ip);
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.errorCode).toBe(ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF);
+  });
+
   it.todo("重定向后对新目标重新执行全部检查（Task 4，集成测试）");
   it.todo("请求体大小 / 超时 / 并发 / 响应大小限制（Task 4，集成测试）");
 });
