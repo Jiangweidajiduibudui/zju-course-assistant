@@ -1,6 +1,7 @@
 import type { Catalog, Section, Session } from "../../../shared/contracts/index.js";
 import { countSessionPoolSections } from "../session/sessionSummary";
 import { getSyntheticDemoCatalog } from "./demoCatalog";
+import { buildExportEnvelope, formatExportEnvelopePreview } from "./exportEnvelope";
 
 /**
  * 导入/导出页（组员 A 提供 API 契约，组员 E 实现 UI；docs/08 §5.1）。
@@ -41,6 +42,7 @@ export function ImportExportPage({
   onOpenWishPlan,
 }: ImportExportPageProps) {
   const sections = catalog?.courses.flatMap((course) => course.sections) ?? [];
+  const exportPreview = session ? formatExportEnvelopePreview(buildExportEnvelope(session)) : null;
 
   return (
     <section className="space-y-5 p-6">
@@ -94,6 +96,18 @@ export function ImportExportPage({
               查看预期课表
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {exportPreview ? (
+        <div className="rounded-lg border bg-white p-4">
+          <h3 className="font-semibold">JSON 导出预览（export.v1）</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            仅展示预览，不提供复制或下载按钮。正式导出/再导入往返由后续 Task 2 接入。
+          </p>
+          <pre className="mt-3 max-h-80 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-100">
+            {exportPreview}
+          </pre>
         </div>
       ) : null}
 

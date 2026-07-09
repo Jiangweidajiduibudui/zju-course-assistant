@@ -34,7 +34,7 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByText("考试时间缺失")).toBeVisible();
   await expect(page.getByText("学分缺失")).toBeVisible();
   await expect(page.getByText("当前 session 草稿")).toBeVisible();
-  await expect(page.getByText("合成 Demo session")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "合成 Demo session" })).toBeVisible();
   await expect(page.getByText("待选池：3 门课程 / 5 个候选教学班")).toBeVisible();
   await expect(page.getByText("学分上限：未填写")).toBeVisible();
 
@@ -55,6 +55,12 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
 
   await page.getByRole("button", { name: "导入/导出" }).click();
   await expect(page.getByText("学分上限：18")).toBeVisible();
+  await expect(page.getByText("JSON 导出预览（export.v1）")).toBeVisible();
+  await expect(page.getByText("仅展示预览，不提供复制或下载按钮")).toBeVisible();
+  await expect(page.getByText('"schemaVersion": "export.v1"')).toBeVisible();
+  await expect(page.getByText('"name": "合成 Demo session"')).toBeVisible();
+  await expect(page.getByText('"creditLimit": 18')).toBeVisible();
+  await expect(page.getByRole("button", { name: /下载 JSON|复制 JSON/ })).toHaveCount(0);
 
   await page.getByRole("button", { name: "进入待筛选志愿" }).click();
   await expect(page.getByRole("heading", { name: /待筛选志愿/ })).toBeVisible();
