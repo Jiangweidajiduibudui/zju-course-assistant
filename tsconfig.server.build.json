@@ -1,0 +1,13 @@
+{
+  // 服务端生产构建：tsc 产物输出到 dist/（dist/server/index.js 为启动入口）。
+  // 前端产物由 vite build 输出到 dist/client/，生产环境由 Fastify @fastify/static 托管。
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["src/server", "src/shared", "src/domain"]
+}

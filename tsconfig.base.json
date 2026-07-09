@@ -1,0 +1,18 @@
+{
+  // 公共编译基线（docs/07 §4.1）：strict、ESM-only、禁止 baseUrl。
+  // 客户端/服务端的 module 与 moduleResolution 差异见 tsconfig.client.json / tsconfig.server.json。
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  }
+}

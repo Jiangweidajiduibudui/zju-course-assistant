@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN902",
+      "courseName": "合成非法样例·重复教学班",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN902-01",
+          "courseCode": "SYN902",
+          "courseName": "合成非法样例·重复教学班",
+          "teachers": ["演示教师庚"],
+          "slots": [{ "term": "spring", "dayOfWeek": 1, "period": 3 }],
+          "place": null,
+          "examTime": null,
+          "credits": 2
+        },
+        {
+          "sectionId": "SYN902-01",
+          "courseCode": "SYN902",
+          "courseName": "合成非法样例·重复教学班",
+          "teachers": ["演示教师辛"],
+          "slots": [{ "term": "spring", "dayOfWeek": 2, "period": 3 }],
+          "place": null,
+          "examTime": null,
+          "credits": 2
+        }
+      ]
+    }
+  ]
+}

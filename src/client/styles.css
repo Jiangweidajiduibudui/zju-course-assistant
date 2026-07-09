@@ -1,0 +1,2 @@
+/* Tailwind v4：CSS-first 配置（docs/07 §4.3）。禁止 v3 的 @tailwind base/components/utilities 写法。 */
+@import "tailwindcss";

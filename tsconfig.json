@@ -1,0 +1,13 @@
+{
+  // 编辑器默认配置（覆盖全仓库，宽松取并集，便于 IDE 语言服务）。
+  // CI 权威 typecheck 用 tsconfig.client.json 与 tsconfig.server.json（pnpm typecheck）。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"]
+  },
+  "include": ["src", "tests", "scripts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+}

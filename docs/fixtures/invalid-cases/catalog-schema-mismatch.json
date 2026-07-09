@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN901",
+      "courseName": "合成非法样例·缺教师",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN901-01",
+          "courseCode": "SYN901",
+          "courseName": "合成非法样例·缺教师",
+          "teachers": [],
+          "slots": [],
+          "place": null,
+          "examTime": null,
+          "credits": 2
+        }
+      ]
+    }
+  ]
+}
