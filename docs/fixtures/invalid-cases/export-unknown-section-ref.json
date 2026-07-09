@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "export.v1",
+  "exportedAt": "2026-07-09T12:30:00.000+08:00",
+  "session": {
+    "schemaVersion": "session.v1",
+    "id": "demo-session-unknown-ref",
+    "name": "合成非法样例·未知 section 引用",
+    "createdAt": "2026-07-09T12:00:00.000+08:00",
+    "baseline": {
+      "schemaVersion": "baseline.v1",
+      "selected": [],
+      "volunteers": [],
+      "importedAt": "2026-07-09T12:00:00.000+08:00"
+    },
+    "pool": {
+      "schemaVersion": "pool.v1",
+      "targets": [
+        {
+          "courseCode": "SYN101",
+          "candidateSectionIds": ["SYN101-01", "DOES-NOT-EXIST"]
+        }
+      ]
+    },
+    "rules": {
+      "schemaVersion": "rules.v1",
+      "creditLimit": null,
+      "bars": []
+    },
+    "plan": null,
+    "history": []
+  }
+}
