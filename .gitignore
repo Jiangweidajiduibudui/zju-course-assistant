@@ -69,6 +69,10 @@ AGENTS.md
 CLAUDE.md
 .github/code-review-graph.instruction.md
 
+# Local development-mode notes and resumable progress ledger
+IMPLEMENT_MODE.md
+PROGRESS.md
+
 # Operating-system metadata
 .DS_Store
 ._*

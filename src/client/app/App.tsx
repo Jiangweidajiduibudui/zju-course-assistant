@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { Catalog } from "../../shared/contracts/index.js";
 import { ImportExportPage } from "../features/import-export/ImportExportPage";
 import { ConsentGate } from "../features/settings/ConsentGate";
 import { SettingsPage } from "../features/settings/SettingsPage";
@@ -13,16 +14,34 @@ import { WishPlanPage } from "../features/wish-plan/WishPlanPage";
  * 暂不引入路由库（新增依赖须按 docs/07 §6 决策）。
  */
 const tabs = [
-  { id: "import", label: "导入/导出", node: <ImportExportPage /> },
-  { id: "wish", label: "待筛选志愿", node: <WishPlanPage /> },
-  { id: "timetable", label: "预期课表", node: <TimetablePage /> },
-  { id: "settings", label: "设置", node: <SettingsPage /> },
+  { id: "import", label: "导入/导出" },
+  { id: "wish", label: "待筛选志愿" },
+  { id: "timetable", label: "预期课表" },
+  { id: "settings", label: "设置" },
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
 
 export function App() {
   const [active, setActive] = useState<TabId>("import");
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+
+  const activePage =
+    active === "import" ? (
+      <ImportExportPage
+        catalog={catalog}
+        onLoadDemoCatalog={setCatalog}
+        onOpenTimetable={() => setActive("timetable")}
+        onOpenWishPlan={() => setActive("wish")}
+      />
+    ) : active === "wish" ? (
+      <WishPlanPage catalog={catalog} onOpenTimetable={() => setActive("timetable")} />
+    ) : active === "timetable" ? (
+      <TimetablePage catalog={catalog} />
+    ) : (
+      <SettingsPage />
+    );
+
   return (
     <ConsentGate>
       <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -43,7 +62,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        {tabs.find((tab) => tab.id === active)?.node}
+        {activePage}
       </div>
     </ConsentGate>
   );

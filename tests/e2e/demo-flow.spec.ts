@@ -19,10 +19,29 @@ function trackZdbkRequests(page: Page): string[] {
   return offenders;
 }
 
-test("首屏可达且展示脚手架横幅（当前唯一点亮的用例）", async ({ page }) => {
+test("Demo mainline 入口：同意后加载合成数据并进入主链路", async ({ page }) => {
   const zdbkRequests = trackZdbkRequests(page);
   await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: /首次使用：隐私声明/ })).toBeVisible();
+  await page.getByRole("button", { name: /同意并继续/ }).click();
+
   await expect(page.getByText("advise-only")).toBeVisible();
+  await page.getByRole("button", { name: "加载合成 Demo 数据" }).click();
+
+  await expect(page.getByText("合成演示数据")).toBeVisible();
+  await expect(page.getByText("合成微积分演示")).toBeVisible();
+  await expect(page.getByText("考试时间缺失")).toBeVisible();
+  await expect(page.getByText("学分缺失")).toBeVisible();
+
+  await page.getByRole("button", { name: "进入待筛选志愿" }).click();
+  await expect(page.getByRole("heading", { name: /待筛选志愿/ })).toBeVisible();
+  await expect(page.getByText("尚未生成推荐")).toBeVisible();
+
+  await page.getByRole("button", { name: "查看预期课表" }).click();
+  await expect(page.getByRole("heading", { name: /预期课表/ })).toBeVisible();
+  await expect(page.getByText("等待 selection-model 输出")).toBeVisible();
+
   expect(zdbkRequests).toEqual([]);
 });
 
