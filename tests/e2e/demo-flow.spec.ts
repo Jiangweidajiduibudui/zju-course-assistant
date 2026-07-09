@@ -44,6 +44,12 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
 
   await page.getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("heading", { name: /设置/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "LLM 端点配置（占位）" })).toBeVisible();
+  await expect(page.getByText("当前不会收集或保存 API key")).toBeVisible();
+  await expect(page.getByText("后续接入同源 Fastify 代理")).toBeVisible();
+  await expect(page.getByRole("button", { name: "配置 LLM（等待 Task 4）" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "保存 LLM 配置" })).toHaveCount(0);
+  await expect(page.getByLabel(/API key|Base URL|模型/)).toHaveCount(0);
   await expect(page.getByText("当前 session：合成 Demo session")).toBeVisible();
   await page.getByLabel("学分上限").fill("18");
   await page.getByRole("button", { name: "保存学分上限" }).click();

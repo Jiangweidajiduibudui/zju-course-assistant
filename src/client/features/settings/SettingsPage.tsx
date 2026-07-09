@@ -47,6 +47,25 @@ export function SettingsPage({
       <h2 className="text-lg font-bold">设置（Task 2/5 交付）</h2>
 
       <div className="rounded-lg border bg-white p-4">
+        <h3 className="font-semibold">LLM 端点配置（占位）</h3>
+        <p className="mt-2 text-sm text-gray-600">
+          当前不会收集或保存 API key，推荐生成、评价摘要、偏好理解和解释仍保持禁用。
+        </p>
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-gray-600">
+          <li>后续接入同源 Fastify 代理后，再做端点能力检测。</li>
+          <li>key 只随单次请求进入后端内存，不落库、不写日志、不进入提示词。</li>
+          <li>正式配置页需要提示费用风险与长时间等待风险。</li>
+        </ul>
+        <button
+          type="button"
+          disabled
+          className="mt-3 rounded border border-gray-300 px-3 py-2 text-sm text-gray-500 disabled:cursor-not-allowed disabled:bg-gray-100"
+        >
+          配置 LLM（等待 Task 4）
+        </button>
+      </div>
+
+      <div className="rounded-lg border bg-white p-4">
         <h3 className="font-semibold">学分上限（D38）</h3>
         {session ? (
           <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
