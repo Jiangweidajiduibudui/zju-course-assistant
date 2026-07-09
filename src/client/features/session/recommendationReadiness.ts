@@ -4,7 +4,7 @@ import { countSessionPoolSections } from "./sessionSummary.js";
 export type RecommendationReadinessState = "ready" | "missing" | "blocked";
 
 export interface RecommendationReadinessItem {
-  id: "session" | "creditLimit" | "pool" | "selectionModel";
+  id: "session" | "creditLimit" | "pool" | "llmConfig" | "selectionModel";
   label: string;
   state: RecommendationReadinessState;
   detail: string;
@@ -64,6 +64,12 @@ export function getRecommendationReadiness(session: Session | null): Recommendat
           detail: "请先加入至少一门课程和一个候选教学班",
         },
     {
+      id: "llmConfig",
+      label: "LLM/key 配置",
+      state: "blocked",
+      detail: "尚未配置 LLM key 或完成能力检测；当前不会调用后端生成推荐",
+    },
+    {
       id: "selectionModel",
       label: "selection-model/planner 接入",
       state: "blocked",
@@ -79,7 +85,7 @@ export function getRecommendationReadiness(session: Session | null): Recommendat
     userPrerequisitesMet,
     canGenerateRecommendation: false,
     summary: userPrerequisitesMet
-      ? "用户前置已完成；生成推荐暂不可用：等待 selection-model 接入"
+      ? "用户前置已完成；生成推荐暂不可用：LLM/key 未配置，且等待 selection-model 接入"
       : `还缺 ${missingCount} 项用户前置：${items
           .filter((item) => item.state === "missing")
           .map((item) => item.label)

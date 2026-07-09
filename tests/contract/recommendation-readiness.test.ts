@@ -41,6 +41,12 @@ describe("生成推荐前置状态", () => {
         detail: "3 门课程 / 5 个候选教学班",
       },
       {
+        id: "llmConfig",
+        label: "LLM/key 配置",
+        state: "blocked",
+        detail: "尚未配置 LLM key 或完成能力检测；当前不会调用后端生成推荐",
+      },
+      {
         id: "selectionModel",
         label: "selection-model/planner 接入",
         state: "blocked",
@@ -55,12 +61,30 @@ describe("生成推荐前置状态", () => {
 
     expect(readiness.userPrerequisitesMet).toBe(true);
     expect(readiness.canGenerateRecommendation).toBe(false);
-    expect(readiness.summary).toBe("用户前置已完成；生成推荐暂不可用：等待 selection-model 接入");
+    expect(readiness.summary).toBe(
+      "用户前置已完成；生成推荐暂不可用：LLM/key 未配置，且等待 selection-model 接入",
+    );
     expect(readiness.items.find((item) => item.id === "creditLimit")).toEqual({
       id: "creditLimit",
       label: "学分上限已填写",
       state: "ready",
       detail: "18 学分",
+    });
+  });
+
+  it("用户前置齐备但 LLM/key 未配置时给出明确降级原因", () => {
+    const session = updateSessionCreditLimit(getDemoSession(), 18);
+    const readiness = getRecommendationReadiness(session);
+
+    expect(readiness.canGenerateRecommendation).toBe(false);
+    expect(readiness.summary).toBe(
+      "用户前置已完成；生成推荐暂不可用：LLM/key 未配置，且等待 selection-model 接入",
+    );
+    expect(readiness.items).toContainEqual({
+      id: "llmConfig",
+      label: "LLM/key 配置",
+      state: "blocked",
+      detail: "尚未配置 LLM key 或完成能力检测；当前不会调用后端生成推荐",
     });
   });
 });

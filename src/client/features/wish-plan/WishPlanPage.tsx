@@ -69,10 +69,10 @@ export function WishPlanPage({ catalog, session, onOpenTimetable }: WishPlanPage
               disabled={!readiness.canGenerateRecommendation}
               className="mt-3 rounded border border-gray-300 px-3 py-2 text-sm text-gray-500 disabled:cursor-not-allowed disabled:bg-gray-100"
             >
-              生成推荐（等待 selection-model）
+              生成推荐（LLM 未配置）
             </button>
             <p className="mt-2 text-xs text-gray-500">
-              本按钮只是前置状态提示，不会调用 LLM、planner 或写入 zdbk。
+              本按钮只是前置状态提示；当前不收集、不保存 key，不会调用 LLM、planner 或写入 zdbk。
             </p>
             <button
               type="button"
