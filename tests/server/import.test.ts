@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildApp } from "../../src/server/app.js";
+import { loadConfig } from "../../src/server/config.js";
 import {
   buildExportEnvelope,
   listIncompleteSectionIds,
@@ -131,6 +134,19 @@ describe("export envelope + section refs", () => {
     });
     const parsed = parseExportEnvelopeJson(JSON.stringify(envelope));
     expect(parsed.ok).toBe(true);
+  });
+
+  it("嵌套 export Schema 错误定位到 session.pool", () => {
+    const result = parseExportEnvelopeJson(
+      readFixture("invalid-cases", "export-nested-schema-mismatch.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]).toMatchObject({
+        code: ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        path: "session.pool.targets.0.candidateSectionIds",
+      });
+    }
   });
 
   it("未知 section 引用 → IMPORT_UNKNOWN_SECTION_REF + 路径", () => {
@@ -280,6 +296,23 @@ describe("baseline / pool 独立校验", () => {
     }
   });
 
+  it("未知候选 sectionId → IMPORT_UNKNOWN_SECTION_REF", () => {
+    const result = parsePoolWithCatalog(
+      readFixture("demo-catalog.synthetic.json"),
+      readFixture("invalid-cases", "pool-unknown-section.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+          path: "pool.targets[0].candidateSectionIds[0]",
+        }),
+      );
+      expect(result.issues.some((i) => i.message.includes("SYN999-01"))).toBe(true);
+    }
+  });
+
   it("session 联检也会拒绝挂错课程的 pool", () => {
     const catalogResult = parseCatalogJson(readFixture("demo-catalog.synthetic.json"));
     expect(catalogResult.ok).toBe(true);
@@ -295,5 +328,79 @@ describe("baseline / pool 独立校验", () => {
     const issues = validateSessionSectionRefs(catalogResult.catalog, session);
     expect(issues.some((i) => i.path.startsWith("session.pool."))).toBe(true);
     expect(issues.some((i) => i.message.includes("不属于 SYN101"))).toBe(true);
+  });
+});
+
+describe("导入 API 路由", () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = await buildApp(loadConfig({ NODE_ENV: "test" }));
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("catalog API 返回规范化数据和摘要", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/import/catalog",
+      payload: { catalogJson: readFixture("demo-catalog.synthetic.json") },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      synthetic: true,
+      courseCount: 3,
+      sectionCount: 5,
+      catalog: { schemaVersion: "catalog.v1" },
+    });
+  });
+
+  it("pool API 返回精确引用错误和对应顶层错误码", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/import/pool",
+      payload: {
+        catalogJson: readFixture("demo-catalog.synthetic.json"),
+        poolJson: readFixture("invalid-cases", "pool-unknown-section.json"),
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      errorCode: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+      details: [
+        {
+          code: ErrorCodes.IMPORT_UNKNOWN_SECTION_REF,
+          path: "pool.targets[0].candidateSectionIds[0]",
+        },
+      ],
+    });
+  });
+
+  it("bundle API 跑通导入 → 修改 → 导出 → 再导入主路径", async () => {
+    const catalogResult = parseCatalogJson(readFixture("demo-catalog.synthetic.json"));
+    expect(catalogResult.ok).toBe(true);
+    if (!catalogResult.ok) {
+      return;
+    }
+    const session = buildDemoSession(catalogResult.catalog, { name: "API 往返测试 session" });
+    const envelope = buildExportEnvelope(session, {
+      exportedAt: "2026-07-09T13:00:00.000+08:00",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/import/bundle",
+      payload: {
+        catalogJson: readFixture("demo-catalog.synthetic.json"),
+        exportJson: JSON.stringify(envelope),
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      envelope: { session: { name: "API 往返测试 session" } },
+    });
   });
 });

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "export.v1",
+  "exportedAt": "2026-07-09T13:00:00.000+08:00",
+  "session": {
+    "schemaVersion": "session.v1",
+    "id": "synthetic-session",
+    "name": "合成导出错误样例",
+    "createdAt": "2026-07-09T12:30:00.000+08:00",
+    "baseline": {
+      "schemaVersion": "baseline.v1",
+      "selected": [],
+      "volunteers": [],
+      "importedAt": "2026-07-09T12:30:00.000+08:00"
+    },
+    "pool": {
+      "schemaVersion": "pool.v1",
+      "targets": [
+        {
+          "courseCode": "SYN101",
+          "candidateSectionIds": []
+        }
+      ]
+    },
+    "rules": {
+      "schemaVersion": "rules.v1",
+      "creditLimit": 24,
+      "bars": []
+    },
+    "plan": null,
+    "history": []
+  }
+}
