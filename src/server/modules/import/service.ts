@@ -7,6 +7,7 @@ import {
   type ExportEnvelope,
   exportEnvelopeSchema,
   type Session,
+  sessionSchema,
 } from "../../../shared/contracts/session.js";
 
 /**
@@ -569,6 +570,56 @@ export function buildExportEnvelope(
   });
 }
 
+/** 解析 session.v1 JSON 文本 */
+export function parseSessionJson(
+  text: string,
+): { ok: true; session: Session } | { ok: false; issues: ImportIssue[] } {
+  const json = parseJsonText(text);
+  if (!json.ok) {
+    return json;
+  }
+  const parsed = sessionSchema.safeParse(json.value);
+  if (!parsed.success) {
+    return { ok: false, issues: zodIssuesToImportIssues(parsed.error) };
+  }
+  return { ok: true, session: parsed.data };
+}
+
+/**
+ * 从 session JSON 文本构造 export.v1（可选 catalog 联检）。
+ * 供 E 在「导出当前 JSON」时走服务端同一套校验，避免只信客户端拼装。
+ */
+export function buildExportFromSessionJson(
+  sessionJson: string,
+  options: { catalogJson?: string; exportedAt?: string } = {},
+):
+  | { ok: true; envelope: ExportEnvelope; incompleteSectionIds: string[] }
+  | { ok: false; issues: ImportIssue[] } {
+  const sessionResult = parseSessionJson(sessionJson);
+  if (!sessionResult.ok) {
+    return sessionResult;
+  }
+
+  let incompleteSectionIds: string[] = [];
+  if (options.catalogJson) {
+    const catalogResult = parseCatalogJson(options.catalogJson);
+    if (!catalogResult.ok) {
+      return catalogResult;
+    }
+    const refIssues = validateSessionSectionRefs(catalogResult.catalog, sessionResult.session);
+    if (refIssues.length > 0) {
+      return { ok: false, issues: refIssues };
+    }
+    incompleteSectionIds = listIncompleteSectionIds(catalogResult.catalog);
+  }
+
+  return {
+    ok: true,
+    envelope: buildExportEnvelope(sessionResult.session, { exportedAt: options.exportedAt }),
+    incompleteSectionIds,
+  };
+}
+
 function collectSectionIds(catalog: Catalog): Set<string> {
   return new Set(collectSectionCourseMap(catalog).keys());
 }
@@ -629,4 +680,12 @@ export const poolRequestSchema = z.object({
   poolJson: z.string().min(1),
   /** 提供则联检 section 引用与课程归属 */
   catalogJson: z.string().min(1).optional(),
+});
+
+export const buildExportRequestSchema = z.object({
+  sessionJson: z.string().min(1),
+  /** 提供则联检 session 内 section 引用 */
+  catalogJson: z.string().min(1).optional(),
+  /** 可选固定导出时间（ISO）；缺省为服务端当前时间 */
+  exportedAt: z.string().min(1).optional(),
 });

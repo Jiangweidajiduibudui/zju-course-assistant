@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN904",
+      "courseName": "合成非法样例·含 Cookie",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN904-01",
+          "courseCode": "SYN904",
+          "courseName": "合成非法样例·含 Cookie",
+          "teachers": ["演示教师"],
+          "slots": [],
+          "place": null,
+          "examTime": null,
+          "credits": 1,
+          "unverifiedRaw": {
+            "note": "session=fake-demo-cookie-value-not-real"
+          }
+        }
+      ]
+    }
+  ]
+}

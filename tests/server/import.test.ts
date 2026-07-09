@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildExportEnvelope,
+  buildExportFromSessionJson,
   listIncompleteSectionIds,
   normalizeCatalog,
   parseBaselineWithCatalog,
@@ -127,6 +128,15 @@ describe("parseCatalogJson", () => {
     if (!result.ok) {
       expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_PRIVACY_SUSPECT)).toBe(true);
       expect(result.issues.some((i) => i.path.includes("place"))).toBe(true);
+    }
+  });
+
+  it("疑似 Cookie → IMPORT_PRIVACY_SUSPECT", () => {
+    const result = parseCatalogJson(readFixture("invalid-cases", "catalog-privacy-cookie.json"));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_PRIVACY_SUSPECT)).toBe(true);
+      expect(result.issues.some((i) => i.path.includes("unverifiedRaw"))).toBe(true);
     }
   });
 
@@ -264,6 +274,33 @@ describe("Task 2 门禁：导入→修改→导出→再导入", () => {
         true,
       );
     }
+  });
+
+  it("buildExportFromSessionJson 构造信封并可再导入", () => {
+    const catalogResult = parseCatalogJson(readFixture("demo-catalog.synthetic.json"));
+    expect(catalogResult.ok).toBe(true);
+    if (!catalogResult.ok) {
+      return;
+    }
+    const session = buildDemoSession(catalogResult.catalog, { name: "build-export 测试" });
+    const built = buildExportFromSessionJson(JSON.stringify(session), {
+      catalogJson: JSON.stringify(catalogResult.catalog),
+      exportedAt: "2026-07-09T15:00:00.000+08:00",
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) {
+      return;
+    }
+    expect(built.envelope.schemaVersion).toBe("export.v1");
+    expect(built.envelope.exportedAt).toBe("2026-07-09T15:00:00.000+08:00");
+    expect(built.envelope.session.name).toBe("build-export 测试");
+    expect(built.incompleteSectionIds).toEqual(listIncompleteSectionIds(catalogResult.catalog));
+
+    const again = parseCatalogExportBundle(
+      JSON.stringify(catalogResult.catalog),
+      JSON.stringify(built.envelope),
+    );
+    expect(again.ok).toBe(true);
   });
 });
 

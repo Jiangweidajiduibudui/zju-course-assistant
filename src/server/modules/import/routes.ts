@@ -3,6 +3,8 @@ import { ErrorCodes } from "../../../shared/contracts/errors.js";
 import { logEvent } from "../diagnostics/logger.js";
 import {
   baselineRequestSchema,
+  buildExportFromSessionJson,
+  buildExportRequestSchema,
   bundleRequestSchema,
   exportEnvelopeRequestSchema,
   importRequestSchema,
@@ -22,6 +24,7 @@ import {
  * import 模块路由（组员 A）。
  * - POST /api/import/catalog —— 校验课程目录 JSON
  * - POST /api/import/export-envelope —— 校验 export.v1（可选联检 catalog）
+ * - POST /api/import/build-export —— 由 session 构造 export.v1（可选联检 catalog）
  * - POST /api/import/bundle —— catalog + export 往返主路径
  * - POST /api/import/baseline —— 校验 baseline.v1（可选联检 catalog）
  * - POST /api/import/pool —— 校验 pool.v1（可选联检 catalog + 课程归属）
@@ -135,6 +138,48 @@ export async function importRoutes(app: FastifyInstance): Promise<void> {
       exportedAt: exportResult.envelope.exportedAt,
       sessionId: exportResult.envelope.session.id,
       envelope: exportResult.envelope,
+    });
+  });
+
+  app.post("/build-export", async (request, reply) => {
+    const started = performance.now();
+    const body = buildExportRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 buildExportRequestSchema",
+        details: body.error.issues,
+      });
+    }
+
+    const result = buildExportFromSessionJson(body.data.sessionJson, {
+      catalogJson: body.data.catalogJson,
+      exportedAt: body.data.exportedAt,
+    });
+    logEvent({
+      level: result.ok ? "info" : "warn",
+      requestId: request.id,
+      generationId: null,
+      module: "import",
+      action: "build_export",
+      status: result.ok ? "ok" : "failed",
+      durationMs: Math.round(performance.now() - started),
+      errorCode: result.ok ? null : (result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH),
+    });
+
+    if (!result.ok) {
+      return reply.code(422).send({
+        errorCode: result.issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: "构造 export.v1 未通过校验",
+        details: result.issues,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      incompleteSectionIds: result.incompleteSectionIds,
+      envelope: result.envelope,
+      exportJson: JSON.stringify(result.envelope),
     });
   });
 

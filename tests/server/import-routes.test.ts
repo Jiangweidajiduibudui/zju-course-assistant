@@ -218,4 +218,67 @@ describe("POST /api/import/*", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().sessionId).toBe("export-only");
   });
+
+  it("POST /build-export 由 session 构造 export.v1", async () => {
+    const catalogRes = await app.inject({
+      method: "POST",
+      url: "/api/import/catalog",
+      payload: { catalogJson: demoCatalogJson },
+    });
+    expect(catalogRes.statusCode).toBe(200);
+    const catalog = catalogRes.json().catalog;
+    const sessionJson = JSON.stringify({
+      schemaVersion: "session.v1",
+      id: "build-export-http",
+      name: "HTTP 构造导出",
+      createdAt: "2026-07-09T12:00:00.000+08:00",
+      baseline: {
+        schemaVersion: "baseline.v1",
+        selected: [],
+        volunteers: [],
+        importedAt: "2026-07-09T12:00:00.000+08:00",
+      },
+      pool: {
+        schemaVersion: "pool.v1",
+        targets: catalog.courses.map(
+          (course: { courseCode: string; sections: { sectionId: string }[] }) => ({
+            courseCode: course.courseCode,
+            candidateSectionIds: course.sections.map(
+              (section: { sectionId: string }) => section.sectionId,
+            ),
+          }),
+        ),
+      },
+      rules: { schemaVersion: "rules.v1", creditLimit: null, bars: [] },
+      plan: null,
+      history: [],
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/import/build-export",
+      payload: {
+        sessionJson,
+        catalogJson: JSON.stringify(catalog),
+        exportedAt: "2026-07-09T16:00:00.000+08:00",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.ok).toBe(true);
+    expect(body.envelope.schemaVersion).toBe("export.v1");
+    expect(body.envelope.session.id).toBe("build-export-http");
+    expect(body.exportJson).toContain("build-export-http");
+    expect(body.incompleteSectionIds).toContain("SYN301-01");
+  });
+
+  it("POST /build-export 缺 sessionJson → 400", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/import/build-export",
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().errorCode).toBe(ErrorCodes.COMMON_VALIDATION_FAILED);
+  });
 });
