@@ -1,0 +1,17 @@
+{
+  "name": "zju-course-assistant",
+  "private": true,
+  "description": "浙江大学 AI 选课助手 — advise-only 选课推荐网站",
+  "scripts": {
+    "dev": "pnpm --filter @zju/client dev",
+    "build": "pnpm --filter @zju/client build",
+    "preview": "pnpm --filter @zju/client preview",
+    "lint": "pnpm --filter @zju/client exec tsc --noEmit",
+    "test": "pnpm exec playwright test --config tests/e2e/playwright.config.ts",
+    "test:ui": "pnpm exec playwright test --config tests/e2e/playwright.config.ts --ui",
+    "verify": "pnpm lint && pnpm build && pnpm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

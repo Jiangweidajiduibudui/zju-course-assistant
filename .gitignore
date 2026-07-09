@@ -17,3 +17,14 @@ Thumbs.db
 
 # Local generated analysis state
 .code-review-graph/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Test output
+test-results/
+playwright-report/
+playwright/.cache/
