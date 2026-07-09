@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { applyPlanAtomically } from "../../src/client/features/session/sessionPlan.js";
 import type { SolverInput } from "../../src/domain/selection-model/index.js";
 import {
   assessSchedulability,
@@ -15,9 +16,10 @@ import type {
   Rules,
   Section,
   SectionId,
+  Session,
   TermSlot,
 } from "../../src/shared/contracts/index.js";
-import { ErrorCodes } from "../../src/shared/contracts/index.js";
+import { ErrorCodes, sessionSchema } from "../../src/shared/contracts/index.js";
 
 /**
  * 求解器性质测试锚点（docs/05 §3.1 —— Task 1 门禁）。
@@ -131,7 +133,37 @@ describe("selection-model 性质（对任意随机输入必须成立）", () => 
       { numRuns: 100, seed: 20260716 },
     );
   });
-  it.todo("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）");
+  it("6. 原子性：取消/失败路径不留下半成品状态（AC-6.4）", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        atomicSessionFailureCaseArbitrary(),
+        async ({ input, session, failureMode }) => {
+          const candidatePlan =
+            failureMode === "cancelled"
+              ? validAtomicCandidatePlan()
+              : invalidOutOfPoolCandidatePlan();
+
+          const result = applyPlanAtomically(session, input, candidatePlan, {
+            label: "性质 6 原子性测试",
+            now: "2026-07-09T18:00:00.000+08:00",
+            cancelled: failureMode === "cancelled",
+          });
+
+          expect(result.kind).toBe("rejected");
+          if (result.kind !== "rejected") {
+            return;
+          }
+          expect(result.session).toEqual(session);
+          expect(result.errorCode).toBe(
+            failureMode === "cancelled"
+              ? ErrorCodes.PLAN_GENERATION_CANCELLED
+              : ErrorCodes.PLAN_FINAL_VALIDATION_FAILED,
+          );
+        },
+      ),
+      { numRuns: 100, seed: 20260717 },
+    );
+  });
   it("7. 志愿合法性：志愿指向池内具体教学班；同课程≤3 且同时间段≤3 同时成立（D30）", async () => {
     await fc.assert(
       fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
@@ -210,6 +242,12 @@ interface GeneratedCase {
 interface MinimalPerturbationCase {
   input: SolverInput;
   currentPlan: CandidatePlan;
+}
+
+interface AtomicSessionFailureCase {
+  input: SolverInput;
+  session: Session;
+  failureMode: "cancelled" | "invalid";
 }
 
 function solverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
@@ -404,6 +442,119 @@ function minimalPerturbationCaseArbitrary(): fc.Arbitrary<MinimalPerturbationCas
       },
     };
   });
+}
+
+function atomicSessionFailureCaseArbitrary(): fc.Arbitrary<AtomicSessionFailureCase> {
+  return fc
+    .record({
+      failureMode: fc.constantFrom<"cancelled" | "invalid">("cancelled", "invalid"),
+      hasCurrentPlan: fc.boolean(),
+      hasHistory: fc.boolean(),
+    })
+    .map(({ failureMode, hasCurrentPlan, hasHistory }) => {
+      const inPoolSection = sectionFor({
+        sectionId: "atomic-in-pool" as SectionId,
+        courseCode: "COURSE_ATOMIC" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 1, period: 1 },
+        examKey: "exam-atomic",
+        examMissing: false,
+        creditMissing: false,
+      });
+      const outsideSection = sectionFor({
+        sectionId: "atomic-outside" as SectionId,
+        courseCode: "COURSE_OUTSIDE" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 2, period: 1 },
+        examKey: "exam-outside",
+        examMissing: false,
+        creditMissing: false,
+      });
+      const baseSession = sessionSchema.parse({
+        schemaVersion: "session.v1",
+        id: "session-atomic-property",
+        name: "原子性性质 session",
+        createdAt: "2026-07-09T18:00:00.000+08:00",
+        baseline: baseline(),
+        pool: {
+          schemaVersion: "pool.v1",
+          targets: [
+            {
+              courseCode: "COURSE_ATOMIC" as CourseCode,
+              candidateSectionIds: [inPoolSection.sectionId],
+            },
+          ],
+        },
+        rules: rules(18),
+        plan: hasCurrentPlan ? validAtomicCandidatePlan() : null,
+        history: hasHistory
+          ? [
+              {
+                at: "2026-07-09T17:00:00.000+08:00",
+                label: "已有历史快照",
+                pool: {
+                  schemaVersion: "pool.v1",
+                  targets: [
+                    {
+                      courseCode: "COURSE_ATOMIC" as CourseCode,
+                      candidateSectionIds: [inPoolSection.sectionId],
+                    },
+                  ],
+                },
+                rules: rules(18),
+                plan: null,
+              },
+            ]
+          : [],
+      });
+
+      return {
+        failureMode,
+        session: baseSession,
+        input: {
+          sections: new Map([
+            [inPoolSection.sectionId, inPoolSection],
+            [outsideSection.sectionId, outsideSection],
+          ]),
+          baseline: baseSession.baseline,
+          pool: baseSession.pool,
+          rules: baseSession.rules,
+          lockedSectionIds: new Set(),
+        },
+      };
+    });
+}
+
+function validAtomicCandidatePlan(): CandidatePlan {
+  return {
+    planId: "plan-atomic-valid",
+    volunteers: [
+      {
+        sectionId: "atomic-in-pool" as SectionId,
+        courseCode: "COURSE_ATOMIC" as CourseCode,
+        rank: 1,
+        groupId: "course:COURSE_ATOMIC",
+        locked: false,
+      },
+    ],
+    groups: [],
+    totalCredits: 3,
+  };
+}
+
+function invalidOutOfPoolCandidatePlan(): CandidatePlan {
+  return {
+    planId: "plan-atomic-invalid",
+    volunteers: [
+      {
+        sectionId: "atomic-outside" as SectionId,
+        courseCode: "COURSE_OUTSIDE" as CourseCode,
+        rank: 1,
+        groupId: "course:COURSE_OUTSIDE",
+        locked: false,
+      },
+    ],
+    groups: [],
+    totalCredits: 3,
+  };
 }
 
 function sectionFor(input: {
