@@ -23,6 +23,7 @@ export function logEvent(
     status: event.status,
     durationMs: event.durationMs,
     errorCode: event.errorCode,
+    cacheState: event.cacheState ?? null,
   };
   // 开发/测试期校验 Schema，防止日志字段漂移；生产直接输出。
   if (process.env.NODE_ENV !== "production") {

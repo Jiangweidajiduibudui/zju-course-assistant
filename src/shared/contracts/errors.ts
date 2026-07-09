@@ -24,6 +24,8 @@ export const ErrorCodes = {
   CHALAOSHI_RATE_LIMITED: "CHALAOSHI_RATE_LIMITED",
   CHALAOSHI_TIMEOUT: "CHALAOSHI_TIMEOUT",
   CHALAOSHI_PARSE_FAILED: "CHALAOSHI_PARSE_FAILED",
+  /** seed/上游均无该教师时的稳定 not-found 契约（禁止 fake success） */
+  CHALAOSHI_TEACHER_NOT_FOUND: "CHALAOSHI_TEACHER_NOT_FOUND",
 
   // —— selection-model（组员 C；性质测试锚点，docs/05 §3.1）——
   MODEL_EXAM_CONFLICT: "MODEL_EXAM_CONFLICT",

@@ -2,7 +2,12 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ServerConfig } from "./config.js";
-import { buildChalaoshiRoutes } from "./modules/chalaoshi/routes.js";
+import type { FetchLike } from "./modules/chalaoshi/fetcher.js";
+import {
+  type BuildChalaoshiRoutesOptions,
+  buildChalaoshiRoutes,
+} from "./modules/chalaoshi/routes.js";
+import type { ChalaoshiService } from "./modules/chalaoshi/service.js";
 import { diagnosticsRoutes } from "./modules/diagnostics/routes.js";
 import { importRoutes } from "./modules/import/routes.js";
 import { llmGatewayRoutes } from "./modules/llm-gateway/routes.js";
@@ -16,7 +21,19 @@ import { plannerRoutes } from "./modules/planner/routes.js";
  *   scripts/verify-no-zdbk-write.ts + E2E 网络断言双重验证）；
  * - Fastify v5 插件统一 async 风格，不混用 done 回调（docs/07 §4.4）。
  */
-export async function buildApp(config: ServerConfig): Promise<FastifyInstance> {
+
+export interface BuildAppOptions {
+  /** 测试注入：贯穿到 chalaoshi service，避免真实 DNS/网络 */
+  chalaoshiFetchImpl?: FetchLike;
+  chalaoshiService?: ChalaoshiService;
+  chalaoshiTimeoutMs?: number;
+  chalaoshiMinIntervalMs?: number;
+}
+
+export async function buildApp(
+  config: ServerConfig,
+  options: BuildAppOptions = {},
+): Promise<FastifyInstance> {
   // 结构化日志由 diagnostics/logger.ts 负责（log.v1），不用 Fastify 内建 pino 输出。
   const app = Fastify({ logger: false });
 
@@ -31,8 +48,16 @@ export async function buildApp(config: ServerConfig): Promise<FastifyInstance> {
 
   app.get("/api/health", async () => ({ status: "ok" as const }));
 
+  const chalaoshiOpts: BuildChalaoshiRoutesOptions = {
+    config,
+    fetchImpl: options.chalaoshiFetchImpl,
+    service: options.chalaoshiService,
+    timeoutMs: options.chalaoshiTimeoutMs,
+    minIntervalMs: options.chalaoshiMinIntervalMs,
+  };
+
   await app.register(importRoutes, { prefix: "/api/import" });
-  await app.register(buildChalaoshiRoutes(config), { prefix: "/api/chalaoshi" });
+  await app.register(buildChalaoshiRoutes(chalaoshiOpts), { prefix: "/api/chalaoshi" });
   await app.register(llmGatewayRoutes, { prefix: "/api/llm" });
   await app.register(plannerRoutes, { prefix: "/api/planner" });
   await app.register(diagnosticsRoutes, { prefix: "/api/diagnostics" });

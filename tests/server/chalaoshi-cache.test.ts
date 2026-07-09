@@ -51,20 +51,23 @@ describe("chalaoshi service 缓存与降级", () => {
     NODE_ENV: "test",
     CHALAOSHI_BASE_URL: "https://chalaoshi.test",
     CHALAOSHI_API_BASE_URL: "https://api.chalaoshi.test",
+    CHALAOSHI_ALLOWED_HOSTS: "chalaoshi.test,api.chalaoshi.test",
   });
 
-  it("上游成功后二次请求命中 L1（不再打上游）", async () => {
+  it("上游成功后首次 live，二次请求命中 L1 为 cached（不再打上游）", async () => {
     resetUpstreamRateLimitForTests();
     const fetchImpl = vi.fn(async () => jsonResponse(readFixture("search.synthetic.json")));
     const service = createChalaoshiService({
       config,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       minIntervalMs: 0,
+      timeoutMs: 50,
     });
 
     const first = await service.searchTeachers("演示教师甲");
     const second = await service.searchTeachers("演示教师甲");
     expect(first.teachers[0]?.id).toBe(900001);
+    expect(first.sourceMeta.cacheState).toBe("live");
     expect(second.sourceMeta.cacheState).toBe("cached");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -78,6 +81,7 @@ describe("chalaoshi service 缓存与降级", () => {
       config,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       minIntervalMs: 0,
+      timeoutMs: 50,
     });
 
     const detail = await service.getTeacherDetail(900001);
@@ -104,6 +108,7 @@ describe("chalaoshi service 缓存与降级", () => {
       config,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       minIntervalMs: 0,
+      timeoutMs: 50,
     });
 
     const live = await service.getTeacherDetail(900001);
@@ -122,8 +127,28 @@ describe("chalaoshi service 缓存与降级", () => {
       config,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       minIntervalMs: 0,
+      timeoutMs: 50,
       disableSeedFallback: true,
     });
     await expect(service.getTeacherDetail(900001)).rejects.toThrow(/HTTP 503|上游/);
+  });
+
+  it("seed 中不存在的 teacherId 抛 CHALAOSHI_TEACHER_NOT_FOUND（非 fake success）", async () => {
+    resetUpstreamRateLimitForTests();
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const service = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+    });
+    await expect(service.getTeacherDetail(424242)).rejects.toMatchObject({
+      errorCode: "CHALAOSHI_TEACHER_NOT_FOUND",
+    });
+    await expect(service.getTeacherComments(424242)).rejects.toMatchObject({
+      errorCode: "CHALAOSHI_TEACHER_NOT_FOUND",
+    });
   });
 });

@@ -1,19 +1,30 @@
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
+import { resetUpstreamRateLimitForTests } from "../../src/server/modules/chalaoshi/fetcher.js";
 
 /** 服务端装配 smoke test：应用可构建、健康检查可用、stub 端点诚实返回 501。 */
 describe("Fastify 应用装配", () => {
   let app: FastifyInstance;
 
   beforeAll(async () => {
+    resetUpstreamRateLimitForTests();
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("mock upstream unavailable");
+    });
     app = await buildApp(
       loadConfig({
         NODE_ENV: "test",
-        CHALAOSHI_BASE_URL: "https://chalaoshi.invalid",
-        CHALAOSHI_API_BASE_URL: "https://api.chalaoshi.invalid",
+        CHALAOSHI_BASE_URL: "https://chalaoshi.test",
+        CHALAOSHI_API_BASE_URL: "https://api.chalaoshi.test",
+        CHALAOSHI_ALLOWED_HOSTS: "chalaoshi.test,api.chalaoshi.test",
       }),
+      {
+        chalaoshiFetchImpl: fetchImpl as unknown as typeof fetch,
+        chalaoshiTimeoutMs: 50,
+        chalaoshiMinIntervalMs: 0,
+      },
     );
   });
 
