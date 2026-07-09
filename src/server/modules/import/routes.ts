@@ -1,47 +1,142 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ErrorCodes } from "../../../shared/contracts/errors.js";
 import { logEvent } from "../diagnostics/logger.js";
-import { importRequestSchema, parseCatalogJson } from "./service.js";
+import {
+  catalogImportRequestSchema,
+  exportImportRequestSchema,
+  exportSerializeRequestSchema,
+  type ImportIssue,
+  parseCatalogJson,
+  parseExportJson,
+  parsePoolJson,
+  poolImportRequestSchema,
+  serializeExportEnvelope,
+} from "./service.js";
 
-/**
- * import 模块路由（组员 A）。
- * POST /api/import/catalog —— 校验课程目录 JSON，返回规范化结果或逐条错误定位。
- */
+function topLevelErrorCode(issues: ImportIssue[]) {
+  return issues[0]?.code ?? ErrorCodes.IMPORT_SCHEMA_MISMATCH;
+}
+
+function sendIssues(reply: FastifyReply, issues: ImportIssue[]) {
+  return reply.code(422).send({
+    errorCode: topLevelErrorCode(issues),
+    message: "导入或导出数据未通过校验",
+    details: issues,
+  });
+}
+
+function logImportOperation(
+  request: FastifyRequest,
+  action: string,
+  started: number,
+  issues?: ImportIssue[],
+): void {
+  logEvent({
+    level: issues === undefined ? "info" : "warn",
+    requestId: request.id,
+    generationId: null,
+    module: "import",
+    action,
+    status: issues === undefined ? "ok" : "failed",
+    durationMs: Math.round(performance.now() - started),
+    errorCode: issues === undefined ? null : topLevelErrorCode(issues),
+  });
+}
+
+/** 无状态 JSON 导入/导出 API；请求载荷内容不会进入日志。 */
 export async function importRoutes(app: FastifyInstance): Promise<void> {
   app.post("/catalog", async (request, reply) => {
     const started = performance.now();
-    const body = importRequestSchema.safeParse(request.body);
+    const body = catalogImportRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({
         errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
-        message: "请求体不符合 importRequestSchema",
+        message: "请求体不符合 catalogImportRequestSchema",
         details: body.error.issues,
       });
     }
     const result = parseCatalogJson(body.data.catalogJson);
-    logEvent({
-      level: result.ok ? "info" : "warn",
-      requestId: request.id,
-      generationId: null,
-      module: "import",
-      action: "parse_catalog",
-      status: result.ok ? "ok" : "failed",
-      durationMs: Math.round(performance.now() - started),
-      errorCode: result.ok ? null : ErrorCodes.IMPORT_SCHEMA_MISMATCH,
-    });
+    logImportOperation(request, "parse_catalog", started, result.ok ? undefined : result.issues);
     if (!result.ok) {
-      return reply.code(422).send({
-        errorCode: ErrorCodes.IMPORT_SCHEMA_MISMATCH,
-        message: "导入数据未通过校验",
-        details: result.issues,
-      });
+      return sendIssues(reply, result.issues);
     }
-    // 只回传摘要；完整数据由客户端 Dexie 持久化（服务端不保存用户规划数据，D04）。
     return reply.send({
       ok: true,
+      catalog: result.catalog,
       synthetic: result.catalog.synthetic,
       courseCount: result.catalog.courses.length,
-      sectionCount: result.catalog.courses.reduce((n, c) => n + c.sections.length, 0),
+      sectionCount: result.catalog.courses.reduce(
+        (count, course) => count + course.sections.length,
+        0,
+      ),
     });
+  });
+
+  app.post("/pool", async (request, reply) => {
+    const started = performance.now();
+    const body = poolImportRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 poolImportRequestSchema",
+        details: body.error.issues,
+      });
+    }
+    const catalogResult = parseCatalogJson(body.data.catalogJson);
+    if (!catalogResult.ok) {
+      logImportOperation(request, "parse_pool", started, catalogResult.issues);
+      return sendIssues(reply, catalogResult.issues);
+    }
+    const result = parsePoolJson(body.data.poolJson, catalogResult.catalog);
+    logImportOperation(request, "parse_pool", started, result.ok ? undefined : result.issues);
+    return result.ok
+      ? reply.send({ ok: true, pool: result.data })
+      : sendIssues(reply, result.issues);
+  });
+
+  app.post("/export/import", async (request, reply) => {
+    const started = performance.now();
+    const body = exportImportRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 exportImportRequestSchema",
+        details: body.error.issues,
+      });
+    }
+    const catalogResult =
+      body.data.catalogJson === undefined ? undefined : parseCatalogJson(body.data.catalogJson);
+    if (catalogResult !== undefined && !catalogResult.ok) {
+      logImportOperation(request, "parse_export", started, catalogResult.issues);
+      return sendIssues(reply, catalogResult.issues);
+    }
+    const result = parseExportJson(body.data.exportJson, catalogResult?.catalog);
+    logImportOperation(request, "parse_export", started, result.ok ? undefined : result.issues);
+    return result.ok
+      ? reply.send({ ok: true, envelope: result.data })
+      : sendIssues(reply, result.issues);
+  });
+
+  app.post("/export", async (request, reply) => {
+    const started = performance.now();
+    const body = exportSerializeRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "请求体不符合 exportSerializeRequestSchema",
+        details: body.error.issues,
+      });
+    }
+    const catalogResult =
+      body.data.catalogJson === undefined ? undefined : parseCatalogJson(body.data.catalogJson);
+    if (catalogResult !== undefined && !catalogResult.ok) {
+      logImportOperation(request, "serialize_export", started, catalogResult.issues);
+      return sendIssues(reply, catalogResult.issues);
+    }
+    const result = serializeExportEnvelope(body.data.envelope, catalogResult?.catalog);
+    logImportOperation(request, "serialize_export", started, result.ok ? undefined : result.issues);
+    return result.ok
+      ? reply.send({ ok: true, exportJson: result.data })
+      : sendIssues(reply, result.issues);
   });
 }
