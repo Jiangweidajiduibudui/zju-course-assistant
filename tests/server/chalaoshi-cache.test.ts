@@ -151,4 +151,135 @@ describe("chalaoshi service 缓存与降级", () => {
       errorCode: "CHALAOSHI_TEACHER_NOT_FOUND",
     });
   });
+
+  it("L1 stale 可反复返回：TTL 过期后上游失败，连续两次均为 stale", async () => {
+    resetUpstreamRateLimitForTests();
+    let failUpstream = false;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (failUpstream) {
+        throw new Error("upstream down");
+      }
+      const url = String(input);
+      if (url.includes("/teacher/900001")) {
+        return htmlResponse(readFixture("teacher-detail.synthetic.html"));
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const service = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+      l1TtlMs: 40,
+    });
+
+    const live = await service.getTeacherDetail(900001);
+    expect(live.sourceMeta.cacheState).toBe("live");
+
+    await new Promise((r) => setTimeout(r, 60));
+    failUpstream = true;
+
+    const stale1 = await service.getTeacherDetail(900001);
+    const stale2 = await service.getTeacherDetail(900001);
+    expect(stale1.sourceMeta.cacheState).toBe("stale");
+    expect(stale2.sourceMeta.cacheState).toBe("stale");
+    expect(stale1.name).toBe("演示教师甲");
+    expect(stale2.name).toBe("演示教师甲");
+  });
+});
+
+describe("chalaoshi L2 公共缓存", () => {
+  const config = loadConfig({
+    NODE_ENV: "test",
+    CHALAOSHI_BASE_URL: "https://chalaoshi.test",
+    CHALAOSHI_API_BASE_URL: "https://api.chalaoshi.test",
+    CHALAOSHI_ALLOWED_HOSTS: "chalaoshi.test,api.chalaoshi.test",
+  });
+
+  it("有 L2 时 live 写回；新 service 实例可从 L2 读到 cached", async () => {
+    resetUpstreamRateLimitForTests();
+    const { createMemoryL2Store } = await import("../../src/server/modules/chalaoshi/l2.js");
+    const l2 = createMemoryL2Store();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/teacher/900001")) {
+        return htmlResponse(readFixture("teacher-detail.synthetic.html"));
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const writer = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+      l2,
+      instanceId: "writer",
+    });
+    const live = await writer.getTeacherDetail(900001);
+    expect(live.sourceMeta.cacheState).toBe("live");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const reader = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+      l2,
+      instanceId: "reader",
+    });
+    const cached = await reader.getTeacherDetail(900001);
+    expect(cached.sourceMeta.cacheState).toBe("cached");
+    expect(cached.name).toBe("演示教师甲");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("L2 过期后上游失败仍返回 stale（跨实例）", async () => {
+    resetUpstreamRateLimitForTests();
+    let clock = Date.parse("2026-07-01T00:00:00.000Z");
+    const now = () => new Date(clock);
+    const { createMemoryL2Store } = await import("../../src/server/modules/chalaoshi/l2.js");
+    const l2 = createMemoryL2Store({ now });
+
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (clock > Date.parse("2026-07-01T00:00:00.000Z")) {
+        throw new Error("upstream down");
+      }
+      const url = String(input);
+      if (url.includes("/teacher/900001")) {
+        return htmlResponse(readFixture("teacher-detail.synthetic.html"));
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const writer = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+      l1TtlMs: 1_000,
+      l2,
+      now,
+      instanceId: "writer",
+    });
+    expect((await writer.getTeacherDetail(900001)).sourceMeta.cacheState).toBe("live");
+
+    // 推进时钟使 L2 过期；新实例无 L1
+    clock += 2_000;
+    const reader = createChalaoshiService({
+      config,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+      timeoutMs: 50,
+      l1TtlMs: 1_000,
+      l2,
+      now,
+      instanceId: "reader",
+    });
+    const stale1 = await reader.getTeacherDetail(900001);
+    const stale2 = await reader.getTeacherDetail(900001);
+    expect(stale1.sourceMeta.cacheState).toBe("stale");
+    expect(stale2.sourceMeta.cacheState).toBe("stale");
+    expect(stale1.name).toBe("演示教师甲");
+  });
 });

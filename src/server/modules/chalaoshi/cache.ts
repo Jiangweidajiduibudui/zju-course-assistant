@@ -6,6 +6,7 @@
  * - L2：PostgreSQL（sql/migrations/0001）：无 DATABASE_URL 时跳过，仅 L1+seed；
  * - 缓存只存公共数据，按来源与教师 ID 键控，不与用户身份绑定；
  * - 教师详情与评论 TTL = 3 天（D28）；允许显式过期降级（stale 标记）。
+ * - stale 读取不得消费条目（noDeleteOnStaleGet），上游持续失败时可反复返回 stale。
  *
  * Task 3 交付；测试锚点：tests/server/chalaoshi-cache.test.ts
  */
@@ -18,7 +19,7 @@ export interface CacheEntry<T> {
   stale: boolean;
 }
 
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+export const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** L1 缓存实例（Task 3 中由 service 装配 L2 与 single-flight） */
 export function createL1Cache<T extends {}>(options?: {
@@ -28,8 +29,10 @@ export function createL1Cache<T extends {}>(options?: {
   return new LRUCache<string, CacheEntry<T>>({
     max: options?.max ?? 2000,
     ttl: options?.ttl ?? THREE_DAYS_MS,
-    // 允许读取刚过期条目做 stale 降级（配合 allowStale 读取）
+    // 允许读取刚过期条目做 stale 降级
     allowStale: true,
+    // 关键：stale get 不得删除条目，否则第二次请求会掉到 seed
+    noDeleteOnStaleGet: true,
   });
 }
 

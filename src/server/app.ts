@@ -1,8 +1,10 @@
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
+import { Pool } from "pg";
 import type { ServerConfig } from "./config.js";
 import type { FetchLike } from "./modules/chalaoshi/fetcher.js";
+import type { L2Store } from "./modules/chalaoshi/l2.js";
 import {
   type BuildChalaoshiRoutesOptions,
   buildChalaoshiRoutes,
@@ -28,6 +30,10 @@ export interface BuildAppOptions {
   chalaoshiService?: ChalaoshiService;
   chalaoshiTimeoutMs?: number;
   chalaoshiMinIntervalMs?: number;
+  /** 测试注入 L2（memory）；生产由 DATABASE_URL 建 Pool */
+  chalaoshiL2?: L2Store | null;
+  /** 测试可注入已有 Pool；否则有 DATABASE_URL 时自动创建 */
+  pgPool?: Pool;
 }
 
 export async function buildApp(
@@ -48,12 +54,27 @@ export async function buildApp(
 
   app.get("/api/health", async () => ({ status: "ok" as const }));
 
+  // L2：有 DATABASE_URL 时建 Pool；无则 chalaoshi 仅 L1+seed（开发/CI 常态）
+  const ownedPool =
+    options.pgPool === undefined && options.chalaoshiL2 === undefined && config.DATABASE_URL
+      ? new Pool({ connectionString: config.DATABASE_URL })
+      : null;
+  const pgPool = options.pgPool ?? ownedPool ?? undefined;
+
+  if (ownedPool) {
+    app.addHook("onClose", async () => {
+      await ownedPool.end();
+    });
+  }
+
   const chalaoshiOpts: BuildChalaoshiRoutesOptions = {
     config,
     fetchImpl: options.chalaoshiFetchImpl,
     service: options.chalaoshiService,
     timeoutMs: options.chalaoshiTimeoutMs,
     minIntervalMs: options.chalaoshiMinIntervalMs,
+    pgPool,
+    l2: options.chalaoshiL2,
   };
 
   await app.register(importRoutes, { prefix: "/api/import" });

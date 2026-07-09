@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { Pool } from "pg";
 import { ErrorCodes } from "../../../shared/contracts/errors.js";
 import type { SourceMeta } from "../../../shared/contracts/index.js";
 import type { ServerConfig } from "../../config.js";
 import { logEvent } from "../diagnostics/logger.js";
 import { ChalaoshiFetchError, type FetchLike } from "./fetcher.js";
+import type { L2Store } from "./l2.js";
 import { ChalaoshiParseError } from "./parser.js";
 import {
   ChalaoshiNotFoundError,
@@ -31,6 +33,9 @@ export interface BuildChalaoshiRoutesOptions {
   service?: ChalaoshiService;
   timeoutMs?: number;
   minIntervalMs?: number;
+  /** L2：有 DATABASE_URL 时由 app 注入 Pool；测试可注入 memory L2 */
+  pgPool?: Pool;
+  l2?: L2Store | null;
 }
 
 function isRoutesOptions(
@@ -57,6 +62,8 @@ export function buildChalaoshiRoutes(configOrOptions: ServerConfig | BuildChalao
       fetchImpl: options.fetchImpl,
       timeoutMs: options.timeoutMs,
       minIntervalMs: options.minIntervalMs,
+      pgPool: options.pgPool,
+      l2: options.l2,
     });
 
   return async function chalaoshiRoutes(app: FastifyInstance): Promise<void> {

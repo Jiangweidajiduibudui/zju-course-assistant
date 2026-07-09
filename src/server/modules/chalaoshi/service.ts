@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { LRUCache } from "lru-cache";
+import type { Pool } from "pg";
 import { ErrorCodes } from "../../../shared/contracts/errors.js";
 import type {
   CommentBatch,
@@ -14,8 +16,11 @@ import {
   cacheKeyTeacherDetail,
   createL1Cache,
   createSingleFlight,
+  THREE_DAYS_MS,
 } from "./cache.js";
+import { preprocessComments } from "./comments-preprocess.js";
 import { ChalaoshiFetchError, type FetchLike, fetchUpstreamText } from "./fetcher.js";
+import { createPostgresL2Store, type L2Store } from "./l2.js";
 import {
   ChalaoshiParseError,
   parseCommentsHtml,
@@ -26,14 +31,15 @@ import { loadSeed } from "./seed.js";
 
 /**
  * chalaoshi 服务编排（组员 B；PROJECT.md §5.4）。
- * 抓取 → 解析 → L1 缓存；失败降级 seed（cacheState=seed，UI 标演示数据）。
- * 无 DATABASE_URL 时不做 L2（开发/CI 常态）。
+ * 读路径：L1 fresh → L2 fresh → upstream；live 成功写回 L1+L2。
+ * 上游失败：L1/L2 stale → seed（无 DB/L2 时仅 L1+seed）。
+ * 跨实例刷新：fetch_lease（有 L2 时）。
  *
  * cacheState 语义：
- * - live：本次请求刚从上游取回（首次写入 L1 后返回）；
- * - cached：命中未过期 L1；
- * - stale：L1 过期后上游失败，返回旧条目；
- * - seed：上游失败且降级合成数据。
+ * - live：本次刚从上游取回；
+ * - cached：命中未过期 L1/L2；
+ * - stale：缓存过期后上游失败，返回旧条目（可反复返回，不消费）；
+ * - seed：无可用缓存时降级合成数据。
  */
 
 export interface ChalaoshiService {
@@ -48,7 +54,7 @@ export interface ChalaoshiService {
 export interface CreateChalaoshiServiceOptions {
   config: ServerConfig;
   fetchImpl?: FetchLike;
-  /** 测试可缩短 TTL */
+  /** 测试可缩短 TTL（同时作用于 L1 与 L2 写入） */
   l1TtlMs?: number;
   /** 测试可关闭上游限频间隔 */
   minIntervalMs?: number;
@@ -57,6 +63,12 @@ export interface CreateChalaoshiServiceOptions {
   /** 为 true 时上游失败不降级 seed，直接抛错（默认 false：Demo 降级） */
   disableSeedFallback?: boolean;
   now?: () => Date;
+  /** 显式注入 L2；优先于 pgPool。传 null 强制禁用 L2 */
+  l2?: L2Store | null;
+  /** 有 DATABASE_URL 时由 app 注入 Pool */
+  pgPool?: Pool;
+  /** lease holder 标识；缺省随机 UUID */
+  instanceId?: string;
 }
 
 export class ChalaoshiNotFoundError extends Error {
@@ -80,22 +92,98 @@ function withMetaCacheState<T extends { sourceMeta: SourceMeta }>(
   };
 }
 
+function resolveL2(options: CreateChalaoshiServiceOptions): L2Store | null {
+  if (options.l2 !== undefined) {
+    return options.l2;
+  }
+  if (options.pgPool) {
+    return createPostgresL2Store(options.pgPool, { now: options.now });
+  }
+  return null;
+}
+
 export function createChalaoshiService(options: CreateChalaoshiServiceOptions): ChalaoshiService {
   const now = options.now ?? (() => new Date());
+  const ttlMs = options.l1TtlMs ?? THREE_DAYS_MS;
   const singleFlight = createSingleFlight();
-  const searchCache = createL1Cache<TeacherIndexEntry[]>({ ttl: options.l1TtlMs });
-  const detailCache = createL1Cache<TeacherDetail>({ ttl: options.l1TtlMs });
-  const commentsCache = createL1Cache<CommentBatch>({ ttl: options.l1TtlMs });
+  const searchCache = createL1Cache<TeacherIndexEntry[]>({ ttl: ttlMs });
+  const detailCache = createL1Cache<TeacherDetail>({ ttl: ttlMs });
+  const commentsCache = createL1Cache<CommentBatch>({ ttl: ttlMs });
+  const l2 = resolveL2(options);
+  const instanceId = options.instanceId ?? randomUUID();
 
   const baseUrl = options.config.CHALAOSHI_BASE_URL.replace(/\/$/, "");
   const apiBase = options.config.CHALAOSHI_API_BASE_URL.replace(/\/$/, "");
-  const allowedHosts = options.config.CHALAOSHI_ALLOWED_HOSTS;
   const fetchOpts = {
     fetchImpl: options.fetchImpl,
     minIntervalMs: options.minIntervalMs,
     timeoutMs: options.timeoutMs,
-    allowedHosts,
+    allowedHosts: options.config.CHALAOSHI_ALLOWED_HOSTS,
   };
+
+  function readL1<T extends {}>(
+    cache: LRUCache<string, CacheEntry<T>>,
+    key: string,
+  ): CacheEntry<T> | undefined {
+    const value = cache.get(key);
+    if (!value) return undefined;
+    const remaining = cache.getRemainingTTL(key);
+    const stale = remaining !== undefined && remaining <= 0;
+    return { ...value, stale };
+  }
+
+  function writeL1<T extends {}>(
+    cache: LRUCache<string, CacheEntry<T>>,
+    key: string,
+    entry: Omit<CacheEntry<T>, "stale"> & { stale?: boolean },
+  ): void {
+    cache.set(key, { ...entry, stale: false });
+  }
+
+  async function readL2<T>(key: string): Promise<CacheEntry<T> | null> {
+    if (!l2) return null;
+    const row = await l2.get(key);
+    if (!row) return null;
+    return {
+      value: row.payload as T,
+      sourceUrl: row.sourceUrl,
+      fetchedAt: row.fetchedAt,
+      stale: row.stale,
+    };
+  }
+
+  async function writeThrough<T extends {}>(
+    cache: LRUCache<string, CacheEntry<T>>,
+    key: string,
+    entry: CacheEntry<T>,
+  ): Promise<void> {
+    writeL1(cache, key, entry);
+    if (l2) {
+      await l2.set(key, {
+        payload: entry.value,
+        sourceUrl: entry.sourceUrl,
+        fetchedAt: entry.fetchedAt,
+        ttlMs,
+      });
+    }
+  }
+
+  /** 跨实例去重：持有 lease 再抓上游；未拿到则短暂等待后重读 L2 */
+  async function fetchUnderLease(key: string, fetchFn: () => Promise<string>): Promise<string> {
+    if (!l2) {
+      return fetchFn();
+    }
+    const acquired = await l2.tryAcquireLease(key, instanceId);
+    if (!acquired) {
+      await new Promise((r) => setTimeout(r, 50));
+      throw new LeaseBusyError();
+    }
+    try {
+      return await fetchFn();
+    } finally {
+      await l2.releaseLease(key, instanceId);
+    }
+  }
 
   async function loadSearchIndex(): Promise<{
     entry: CacheEntry<TeacherIndexEntry[]>;
@@ -103,14 +191,34 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
   }> {
     const key = cacheKeySearch();
     return singleFlight(key, async () => {
-      const hit = readFreshOrStale(searchCache, key);
-      if (hit && !hit.stale) {
-        return { entry: hit, cacheState: "cached" as const };
+      const l1 = readL1(searchCache, key);
+      if (l1 && !l1.stale) {
+        return { entry: l1, cacheState: "cached" as const };
       }
 
+      let l2Hit = await readL2<TeacherIndexEntry[]>(key);
+      if (l2Hit && !l2Hit.stale) {
+        writeL1(searchCache, key, l2Hit);
+        return { entry: l2Hit, cacheState: "cached" as const };
+      }
+
+      const staleFallback = l1?.stale ? l1 : l2Hit?.stale ? l2Hit : undefined;
       const sourceUrl = `${baseUrl}/static/json/search.json`;
+
       try {
-        const text = await fetchUpstreamText(sourceUrl, fetchOpts);
+        let text: string;
+        try {
+          text = await fetchUnderLease(key, () => fetchUpstreamText(sourceUrl, fetchOpts));
+        } catch (leaseErr) {
+          if (!(leaseErr instanceof LeaseBusyError)) throw leaseErr;
+          l2Hit = await readL2<TeacherIndexEntry[]>(key);
+          if (l2Hit && !l2Hit.stale) {
+            writeL1(searchCache, key, l2Hit);
+            return { entry: l2Hit, cacheState: "cached" as const };
+          }
+          text = await fetchUpstreamText(sourceUrl, fetchOpts);
+        }
+
         let raw: unknown;
         try {
           raw = JSON.parse(text);
@@ -124,27 +232,25 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
           fetchedAt: now().toISOString(),
           stale: false,
         };
-        searchCache.set(key, entry);
-        // 刚从上游取回：对外为 live；写入 L1 后下次命中才是 cached
+        await writeThrough(searchCache, key, entry);
         return { entry, cacheState: "live" as const };
       } catch (cause) {
-        if (hit?.stale) {
-          return { entry: { ...hit, stale: true }, cacheState: "stale" as const };
+        if (staleFallback) {
+          return { entry: { ...staleFallback, stale: true }, cacheState: "stale" as const };
         }
         if (options.disableSeedFallback) {
           throw toServiceError(cause);
         }
         const seed = await loadSeed();
-        const value: TeacherIndexEntry[] = seed.teachers.map((t) => ({
-          id: t.teacherId,
-          name: t.name,
-          college: t.college,
-          rate: t.rating,
-          hot: t.ratingCount,
-        }));
         return {
           entry: {
-            value,
+            value: seed.teachers.map((t) => ({
+              id: t.teacherId,
+              name: t.name,
+              college: t.college,
+              rate: t.rating,
+              hot: t.ratingCount,
+            })),
             sourceUrl: "seed://demo-chalaoshi.synthetic.json",
             fetchedAt: seed.generatedAt,
             stale: false,
@@ -183,18 +289,58 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
     async getTeacherDetail(teacherId: number) {
       const key = cacheKeyTeacherDetail(teacherId);
       return singleFlight(key, async () => {
-        const hit = readFreshOrStale(detailCache, key);
-        if (hit && !hit.stale) {
-          return withMetaCacheState(hit.value, "cached", hit.sourceUrl, hit.fetchedAt);
+        const l1 = readL1(detailCache, key);
+        if (l1 && !l1.stale) {
+          return withMetaCacheState(l1.value, "cached", l1.sourceUrl, l1.fetchedAt);
         }
 
+        let l2Hit = await readL2<TeacherDetail>(key);
+        if (l2Hit && !l2Hit.stale) {
+          const detail = withMetaCacheState(
+            l2Hit.value,
+            "cached",
+            l2Hit.sourceUrl,
+            l2Hit.fetchedAt,
+          );
+          writeL1(detailCache, key, {
+            value: detail,
+            sourceUrl: l2Hit.sourceUrl,
+            fetchedAt: l2Hit.fetchedAt,
+          });
+          return detail;
+        }
+
+        const staleFallback = l1?.stale ? l1 : l2Hit?.stale ? l2Hit : undefined;
         const sourceUrl = `${baseUrl}/teacher/${teacherId}/`;
+
         try {
-          const html = await fetchUpstreamText(sourceUrl, fetchOpts);
+          let html: string;
+          try {
+            html = await fetchUnderLease(key, () => fetchUpstreamText(sourceUrl, fetchOpts));
+          } catch (leaseErr) {
+            if (!(leaseErr instanceof LeaseBusyError)) throw leaseErr;
+            l2Hit = await readL2<TeacherDetail>(key);
+            if (l2Hit && !l2Hit.stale) {
+              const detail = withMetaCacheState(
+                l2Hit.value,
+                "cached",
+                l2Hit.sourceUrl,
+                l2Hit.fetchedAt,
+              );
+              writeL1(detailCache, key, {
+                value: detail,
+                sourceUrl: l2Hit.sourceUrl,
+                fetchedAt: l2Hit.fetchedAt,
+              });
+              return detail;
+            }
+            html = await fetchUpstreamText(sourceUrl, fetchOpts);
+          }
+
           const parsed = parseTeacherDetailHtml(html, sourceUrl);
           const fetchedAt = now().toISOString();
           const detail = withMetaCacheState(parsed, "live", sourceUrl, fetchedAt);
-          detailCache.set(key, {
+          await writeThrough(detailCache, key, {
             value: detail,
             sourceUrl,
             fetchedAt,
@@ -202,8 +348,13 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
           });
           return detail;
         } catch (cause) {
-          if (hit?.stale) {
-            return withMetaCacheState(hit.value, "stale", hit.sourceUrl, hit.fetchedAt);
+          if (staleFallback) {
+            return withMetaCacheState(
+              staleFallback.value,
+              "stale",
+              staleFallback.sourceUrl,
+              staleFallback.fetchedAt,
+            );
           }
           if (options.disableSeedFallback) {
             throw toServiceError(cause);
@@ -216,22 +367,57 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
     async getTeacherComments(teacherId: number) {
       const key = cacheKeyComments(teacherId);
       return singleFlight(key, async () => {
-        const hit = readFreshOrStale(commentsCache, key);
-        if (hit && !hit.stale) {
-          return withMetaCacheState(hit.value, "cached", hit.sourceUrl, hit.fetchedAt);
+        const l1 = readL1(commentsCache, key);
+        if (l1 && !l1.stale) {
+          return withMetaCacheState(l1.value, "cached", l1.sourceUrl, l1.fetchedAt);
         }
 
+        let l2Hit = await readL2<CommentBatch>(key);
+        if (l2Hit && !l2Hit.stale) {
+          const batch = withMetaCacheState(l2Hit.value, "cached", l2Hit.sourceUrl, l2Hit.fetchedAt);
+          writeL1(commentsCache, key, {
+            value: batch,
+            sourceUrl: l2Hit.sourceUrl,
+            fetchedAt: l2Hit.fetchedAt,
+          });
+          return batch;
+        }
+
+        const staleFallback = l1?.stale ? l1 : l2Hit?.stale ? l2Hit : undefined;
         const sourceUrl = `${apiBase}/comments/${teacherId}?sort=time`;
+
         try {
-          const html = await fetchUpstreamText(sourceUrl, fetchOpts);
-          const comments = parseCommentsHtml(html);
+          let html: string;
+          try {
+            html = await fetchUnderLease(key, () => fetchUpstreamText(sourceUrl, fetchOpts));
+          } catch (leaseErr) {
+            if (!(leaseErr instanceof LeaseBusyError)) throw leaseErr;
+            l2Hit = await readL2<CommentBatch>(key);
+            if (l2Hit && !l2Hit.stale) {
+              const batch = withMetaCacheState(
+                l2Hit.value,
+                "cached",
+                l2Hit.sourceUrl,
+                l2Hit.fetchedAt,
+              );
+              writeL1(commentsCache, key, {
+                value: batch,
+                sourceUrl: l2Hit.sourceUrl,
+                fetchedAt: l2Hit.fetchedAt,
+              });
+              return batch;
+            }
+            html = await fetchUpstreamText(sourceUrl, fetchOpts);
+          }
+
+          const comments = preprocessComments(parseCommentsHtml(html), { now: now() });
           const fetchedAt = now().toISOString();
           const batch: CommentBatch = {
             teacherId,
             comments,
             sourceMeta: { sourceUrl, fetchedAt, cacheState: "live" },
           };
-          commentsCache.set(key, {
+          await writeThrough(commentsCache, key, {
             value: batch,
             sourceUrl,
             fetchedAt,
@@ -239,30 +425,29 @@ export function createChalaoshiService(options: CreateChalaoshiServiceOptions): 
           });
           return batch;
         } catch (cause) {
-          if (hit?.stale) {
-            return withMetaCacheState(hit.value, "stale", hit.sourceUrl, hit.fetchedAt);
+          if (staleFallback) {
+            return withMetaCacheState(
+              staleFallback.value,
+              "stale",
+              staleFallback.sourceUrl,
+              staleFallback.fetchedAt,
+            );
           }
           if (options.disableSeedFallback) {
             throw toServiceError(cause);
           }
-          return commentsFromSeed(teacherId);
+          return commentsFromSeed(teacherId, now());
         }
       });
     },
   };
 }
 
-function readFreshOrStale<T extends {}>(
-  cache: LRUCache<string, CacheEntry<T>>,
-  key: string,
-): CacheEntry<T> | undefined {
-  const value = cache.get(key);
-  if (!value) {
-    return undefined;
+class LeaseBusyError extends Error {
+  constructor() {
+    super("fetch lease held by another instance");
+    this.name = "LeaseBusyError";
   }
-  const remaining = cache.getRemainingTTL(key);
-  const stale = remaining !== undefined && remaining <= 0;
-  return { ...value, stale };
 }
 
 async function detailFromSeed(teacherId: number): Promise<TeacherDetail> {
@@ -282,7 +467,7 @@ async function detailFromSeed(teacherId: number): Promise<TeacherDetail> {
   };
 }
 
-async function commentsFromSeed(teacherId: number): Promise<CommentBatch> {
+async function commentsFromSeed(teacherId: number, asOf: Date): Promise<CommentBatch> {
   const seed = await loadSeed();
   const teacher = seed.teachers.find((t) => t.teacherId === teacherId);
   if (!teacher) {
@@ -290,7 +475,7 @@ async function commentsFromSeed(teacherId: number): Promise<CommentBatch> {
   }
   return {
     teacherId,
-    comments: teacher.comments,
+    comments: preprocessComments(teacher.comments, { now: asOf }),
     sourceMeta: {
       sourceUrl: "seed://demo-chalaoshi.synthetic.json",
       fetchedAt: seed.generatedAt,
