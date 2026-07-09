@@ -3,11 +3,12 @@ import { useState } from "react";
 import type { Catalog, Session } from "../../shared/contracts/index.js";
 import { ImportExportPage } from "../features/import-export/ImportExportPage";
 import { buildDemoSessionDraft } from "../features/import-export/sessionDraft";
+import { updateSessionCreditLimit } from "../features/session/sessionRules";
 import { ConsentGate } from "../features/settings/ConsentGate";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { TimetablePage } from "../features/timetable-projection/TimetablePage";
 import { WishPlanPage } from "../features/wish-plan/WishPlanPage";
-import { db } from "./db";
+import { clearAllLocalData, db } from "./db";
 
 /**
  * 应用外壳（组员 E）。
@@ -46,6 +47,21 @@ export function App() {
     setSession(nextSession);
   }
 
+  async function handleUpdateCreditLimit(creditLimit: number): Promise<void> {
+    if (!activeSession) {
+      return;
+    }
+    const nextSession = updateSessionCreditLimit(activeSession, creditLimit);
+    await db.sessions.put(nextSession);
+    setSession(nextSession);
+  }
+
+  async function handleClearAllLocalData(): Promise<void> {
+    await clearAllLocalData();
+    setCatalog(null);
+    setSession(null);
+  }
+
   const activePage =
     active === "import" ? (
       <ImportExportPage
@@ -64,7 +80,11 @@ export function App() {
     ) : active === "timetable" ? (
       <TimetablePage catalog={catalog} session={activeSession} />
     ) : (
-      <SettingsPage />
+      <SettingsPage
+        session={activeSession}
+        onUpdateCreditLimit={handleUpdateCreditLimit}
+        onClearAllLocalData={handleClearAllLocalData}
+      />
     );
 
   return (

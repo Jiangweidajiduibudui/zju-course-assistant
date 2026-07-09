@@ -42,6 +42,20 @@ test("Demo mainline 入口：同意后加载合成数据并进入主链路", asy
   await expect(page.getByText("当前 session 草稿")).toBeVisible();
   await expect(page.getByText("待选池：3 门课程 / 5 个候选教学班")).toBeVisible();
 
+  await page.getByRole("button", { name: "设置" }).click();
+  await expect(page.getByRole("heading", { name: /设置/ })).toBeVisible();
+  await expect(page.getByText("当前 session：合成 Demo session")).toBeVisible();
+  await page.getByLabel("学分上限").fill("18");
+  await page.getByRole("button", { name: "保存学分上限" }).click();
+  await expect(page.getByText("已保存学分上限：18")).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "设置" }).click();
+  await expect(page.getByText("已保存学分上限：18")).toBeVisible();
+
+  await page.getByRole("button", { name: "导入/导出" }).click();
+  await expect(page.getByText("学分上限：18")).toBeVisible();
+
   await page.getByRole("button", { name: "进入待筛选志愿" }).click();
   await expect(page.getByRole("heading", { name: /待筛选志愿/ })).toBeVisible();
   await expect(page.getByText("尚未生成推荐")).toBeVisible();
