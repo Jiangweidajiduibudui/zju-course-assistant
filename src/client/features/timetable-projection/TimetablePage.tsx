@@ -6,144 +6,188 @@ import { type GridEntry, TimetableGrid } from "./TimetableGrid";
  * 预期课表页（组员 E；docs/08 §8.2 —— zdbk 心智模型）。
  *
  * 定位：投影当前首选方案的预期课表；备选堆叠仅作标记。
- * 边界：不得把互斥备选渲染成"同时上课"；考试/学分未知的教学班不进课表（D37/D38）；
- *      本页只渲染 selection-model 的 TimetableProjection 输出，不自行计算冲突。
- * 附加：支持"为什么这样排"——展示 LLM 软理由 + deterministic 校验摘要。
- * 成功判据：Task 5 门禁 + Playwright 主流程（docs/05 §5.1）。
+ * 边界：不得把互斥备选渲染成“同时上课”；考试/学分未知的教学班不进课表（D37/D38）。
  */
 interface TimetablePageProps {
   catalog: Catalog | null;
   session: Session | null;
 }
 
+function buildSectionMap(catalog: Catalog | null): Map<string, Section> {
+  const sectionMap = new Map<string, Section>();
+  for (const course of catalog?.courses ?? []) {
+    for (const section of course.sections) sectionMap.set(section.sectionId, section);
+  }
+  return sectionMap;
+}
+
 function buildGridEntries(catalog: Catalog | null, session: Session | null): GridEntry[] {
   if (!catalog || !session) return [];
-
-  const sectionMap = new Map<string, Section>();
-  for (const course of catalog.courses) {
-    for (const section of course.sections) {
-      sectionMap.set(section.sectionId, section);
-    }
-  }
-
-  // If plan exists, show plan volunteers; otherwise show pool candidates as preview
+  const sectionMap = buildSectionMap(catalog);
   const plan = session.plan;
   const sectionIds = plan
-    ? plan.volunteers.map((v) => v.sectionId)
-    : session.pool.targets.flatMap((t) => t.candidateSectionIds);
-
+    ? plan.volunteers.map((volunteer) => volunteer.sectionId)
+    : session.pool.targets.flatMap((target) => target.candidateSectionIds);
   const seen = new Set<string>();
   const entries: GridEntry[] = [];
 
-  for (const sid of sectionIds) {
-    if (seen.has(sid)) continue;
-    seen.add(sid);
-    const section = sectionMap.get(sid);
-    if (!section) continue;
-    // 考试/学分缺失的教学班不进课表（D37/D38）
-    if (!section.examTime || !section.credits) continue;
-
+  for (const sectionId of sectionIds) {
+    if (seen.has(sectionId)) continue;
+    seen.add(sectionId);
+    const section = sectionMap.get(sectionId);
+    if (!section || !section.examTime || !section.credits) continue;
     entries.push({
       sectionId: section.sectionId,
       courseName: section.courseName,
       courseCode: section.courseCode,
       slots: section.slots,
+      teacherName: section.teachers.join("、"),
+      location: section.place ?? undefined,
     });
   }
-
   return entries;
+}
+
+function missingReason(section: Section): string | null {
+  if (section.examTime === null) return "考试时间缺失";
+  if (section.credits === null) return "学分缺失";
+  return null;
 }
 
 export function TimetablePage({ catalog, session }: TimetablePageProps) {
   const entries = buildGridEntries(catalog, session);
-  const plan = session?.plan;
   const poolSectionCount = session ? countSessionPoolSections(session) : 0;
-
-  if (!session) {
-    return (
-      <section className="space-y-4 p-6">
-        <h2 className="text-lg font-bold">预期课表</h2>
-        <p className="rounded-lg border bg-white p-4 text-sm text-gray-600">
-          尚未加载课程数据。请先回到"导入/导出"加载合成 Demo 数据。
-        </p>
-      </section>
-    );
-  }
+  const plan = session?.plan;
+  const excluded = (catalog?.courses.flatMap((course) => course.sections) ?? []).filter((section) =>
+    missingReason(section),
+  );
 
   return (
-    <section className="space-y-4 p-6">
-      <div className="flex items-center justify-between">
+    <section className="page-shell page-stack" aria-labelledby="timetable-heading">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="text-lg font-bold">预期课表</h2>
-          <p className="text-sm text-gray-500">
-            {plan
-              ? `方案「${plan.planId}」· ${plan.volunteers.length} 个志愿`
-              : `待选池预览 · ${session.pool.targets.length} 门课程 / ${poolSectionCount} 个候选教学班`}
+          <h1 id="timetable-heading" className="text-2xl font-semibold tracking-[-0.015em] text-ink">
+            预期课表
+          </h1>
+          <p className="mt-2 max-w-[65ch] text-[13.5px] leading-6 text-ink-muted">
+            {session
+              ? plan
+                ? `方案「${plan.planId}」· ${plan.volunteers.length} 个志愿`
+                : `待选池预览 · ${session.pool.targets.length} 门课程 / ${poolSectionCount} 个候选教学班`
+              : "尚未加载课程数据。请先回到“导入/导出”加载合成 Demo 数据。"}
           </p>
         </div>
-        {plan && (
-          <span className="rounded bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
-            当前为候选方案预览；planner 接入后切换为正式课表投影
-          </span>
-        )}
+        <div className="flex rounded-[11px] border border-hairline bg-card p-1 shadow-warm-1">
+          <button type="button" className="segment-button bg-blue-soft px-3 py-2 text-blue-ink">
+            秋学期
+          </button>
+          <button type="button" className="segment-button px-3 py-2 text-ink-faint" disabled>
+            冬学期
+          </button>
+        </div>
       </div>
 
-      {/* Plan summary */}
-      {plan && (
-        <div className="flex gap-3 text-sm">
-          <div className="rounded-lg border bg-white px-4 py-2">
-            <span className="font-semibold">{plan.volunteers.length}</span> 个志愿
+      {session ? (
+        <div className="grid gap-4">
+          <div className="panel p-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="font-semibold text-ink">
+                  {plan ? "当前候选方案预览" : "等待 selection-model 输出"}
+                </p>
+                <p className="mt-2 text-[13.5px] text-ink-muted">Session 草稿：{session.name}</p>
+                <p className="mt-1 text-[13.5px] text-ink-muted">
+                  待选池：{session.pool.targets.length} 门课程 / {poolSectionCount} 个候选教学班
+                </p>
+              </div>
+              <span className="pill pill-neutral px-3 py-1.5">projection.v1</span>
+            </div>
+            <p className="mt-3 max-w-[76ch] text-[13px] leading-6 text-ink-muted">
+              {plan
+                ? "本页只渲染 planner/selection-model 输出，不自行判断合法性。"
+                : "当前用待选池可入课表教学班做预览；硬字段缺失的教学班留在待选池，不进入课表。"}
+            </p>
           </div>
-          <div className="rounded-lg border bg-white px-4 py-2">
-            <span className="font-semibold">{plan.groups.length}</span> 个志愿组
+
+          {plan ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="panel p-4 text-[13px] text-ink-muted">
+                <span className="text-[20px] font-semibold text-ink">{plan.volunteers.length}</span> 个志愿
+              </div>
+              <div className="panel p-4 text-[13px] text-ink-muted">
+                <span className="text-[20px] font-semibold text-ink">{plan.groups.length}</span> 个志愿组
+              </div>
+              <div className="panel p-4 text-[13px] text-ink-muted">
+                锁定 <span className="text-[20px] font-semibold text-ink">{plan.volunteers.filter((v) => v.locked).length}</span> 项
+              </div>
+            </div>
+          ) : null}
+
+          {entries.length < poolSectionCount ? (
+            <div className="rounded-[14px] border border-warn-border bg-warn-bg p-4 text-[13px] leading-6 text-warn">
+              ⚠️ 部分教学班因考试时间或学分缺失未进入课表（D37/D38）。请返回“待筛选志愿”补全缺失信息。
+            </div>
+          ) : null}
+
+          <TimetableGrid entries={entries} />
+
+          <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            <div className="panel p-5">
+              <h2 className="text-[15px] font-semibold text-ink">待选池说明区</h2>
+              <div className="mt-4 grid gap-3">
+                {excluded.length > 0 ? (
+                  excluded.map((section) => (
+                    <div key={section.sectionId} className="rounded-[12px] border border-warn-border bg-warn-bg p-3 text-[12.5px] leading-5 text-warn">
+                      <p className="font-mono font-semibold">{section.sectionId}</p>
+                      <p className="mt-1">reasonCode：{missingReason(section)}</p>
+                      <p className="mt-1">缺失硬字段，留待选池，不进入课表。</p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-[13px] text-ink-muted">暂无硬字段缺失教学班。</p>
+                )}
+              </div>
+            </div>
+
+            <div className="panel p-5">
+              <h2 className="text-[15px] font-semibold text-ink">为什么这样排</h2>
+              <div className="mt-4 rounded-[12px] border border-blue-soft-border bg-blue-soft p-4 text-[12.5px] leading-6 text-blue-ink">
+                <p className="font-semibold">示例 · LLM 未接入</p>
+                <ul className="mt-2 list-disc space-y-1 pl-4">
+                  <li>首选可入课表教学班进入网格。</li>
+                  <li>重叠或缺失硬字段的候选留在待选池说明区。</li>
+                  <li>正式推荐以 selection-model 终校验结果为准。</li>
+                </ul>
+              </div>
+              <div className="mt-4 grid gap-2 text-[12.5px] leading-5 text-ok">
+                <p className="pill pill-ok justify-start px-3 py-2">deterministic · 事实：{session.pool.targets.length} 门课程 / {poolSectionCount} 个教学班</p>
+                <p className="pill pill-ok justify-start px-3 py-2">advise-only 不写入 zdbk</p>
+              </div>
+              <p className="mt-4 text-[12.5px] text-ink-faint">风险：暂不可评估</p>
+            </div>
           </div>
-          <div className="rounded-lg border bg-white px-4 py-2">
-            锁定{" "}
-            <span className="font-semibold">{plan.volunteers.filter((v) => v.locked).length}</span>{" "}
-            项
-          </div>
+
+          {entries.length > 0 ? (
+            <button
+              type="button"
+              className="secondary-button w-fit px-4 py-2.5"
+              onClick={() => {
+                const lines = entries.map(
+                  (entry) =>
+                    `${entry.courseCode} ${entry.courseName}: ${entry.slots.map((slot) => `周${slot.dayOfWeek}第${slot.period}节`).join(" / ")}`,
+                );
+                const text = `预期课表\n${"=".repeat(36)}\n\n${lines.join("\n")}`;
+                navigator.clipboard.writeText(text).catch(() => undefined);
+              }}
+            >
+              复制课表文本
+            </button>
+          ) : null}
         </div>
-      )}
-
-      {/* Excluded sections warning */}
-      {entries.length < poolSectionCount && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          ⚠️ 部分教学班因考试时间或学分缺失未进入课表（D37/D38）。 请返回"待筛选志愿"补全缺失信息。
-        </div>
-      )}
-
-      {/* The actual grid */}
-      <TimetableGrid entries={entries} />
-
-      {/* Why explanation (placeholder until LLM is wired) */}
-      {plan && (
-        <details className="rounded-lg border bg-white p-4 text-sm">
-          <summary className="cursor-pointer font-semibold">为什么这样排？</summary>
-          <p className="mt-2 text-gray-500">
-            LLM 软理由 + deterministic 校验摘要将在 planner 接入后展示。
-          </p>
-        </details>
-      )}
-
-      {/* Export */}
-      {entries.length > 0 && (
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="rounded border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-            onClick={() => {
-              const lines = entries.map(
-                (e) =>
-                  `${e.courseCode} ${e.courseName}: ${e.slots.map((s) => `周${s.dayOfWeek}第${s.period}节`).join(" / ")}`,
-              );
-              const text = `预期课表\n${"=".repeat(36)}\n\n${lines.join("\n")}`;
-              navigator.clipboard.writeText(text).catch(() => {
-                // Clipboard write failed — silently ignore
-              });
-            }}
-          >
-            复制课表文本
-          </button>
+      ) : (
+        <div className="panel-soft p-5 text-[13.5px] leading-6 text-ink-muted">
+          <p className="font-semibold text-ink">尚未加载课程数据</p>
+          <p className="mt-1">请先回到“导入/导出”加载合成 Demo 数据。</p>
         </div>
       )}
     </section>

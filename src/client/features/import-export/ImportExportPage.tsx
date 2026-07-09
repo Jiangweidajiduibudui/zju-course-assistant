@@ -1,4 +1,10 @@
-import type { Catalog, Section, Session } from "../../../shared/contracts/index.js";
+import type {
+  Catalog,
+  Course,
+  Section,
+  Session,
+  TermSlot,
+} from "../../../shared/contracts/index.js";
 import { countSessionPoolSections } from "../session/sessionSummary";
 import { getSyntheticDemoCatalog } from "./demoCatalog";
 import { buildExportEnvelope, formatExportEnvelopePreview } from "./exportEnvelope";
@@ -7,10 +13,8 @@ import { buildExportEnvelope, formatExportEnvelopePreview } from "./exportEnvelo
  * 导入/导出页（组员 A 提供 API 契约，组员 E 实现 UI；docs/08 §5.1）。
  *
  * 定位：内置 Demo 数据加载、JSON 导入（错误逐条定位展示）、少量字段修正、
- *      导出当前 JSON（export.v1 往返一致 —— Task 2 门禁）。
- * 边界：首版不支持 Excel、截图 OCR、HTML 粘贴（docs/08 §5.1）；
- *      不索取 zdbk 密码/Cookie/token（AC-2.3）；导入时间必须展示（D20）。
- * 成功判据：导入→修改→导出→再导入一致；缺失硬字段正确留在待选池（Task 2 门禁）。
+ *      导出当前 JSON（export.v1 往返一致）。
+ * 边界：不索取 zdbk 密码/Cookie/token；不访问 zdbk；不伪装真实推荐。
  */
 interface ImportExportPageProps {
   catalog: Catalog | null;
@@ -20,18 +24,47 @@ interface ImportExportPageProps {
   onOpenWishPlan: () => void;
 }
 
-function sectionStatus(section: Section): string[] {
-  const status: string[] = [];
+interface SectionStatus {
+  label: string;
+  tone: "ok" | "warn";
+}
+
+const termLabels: Record<TermSlot["term"], string> = {
+  spring: "春",
+  summer: "夏",
+  autumn: "秋",
+  winter: "冬",
+};
+
+function sectionStatus(section: Section): SectionStatus[] {
+  const status: SectionStatus[] = [];
   if (section.examTime === null) {
-    status.push("考试时间缺失");
+    status.push({ label: "考试时间缺失", tone: "warn" });
   }
   if (section.credits === null) {
-    status.push("学分缺失");
+    status.push({ label: "学分缺失", tone: "warn" });
   }
   if (status.length === 0) {
-    status.push("硬字段完整");
+    status.push({ label: "硬字段完整", tone: "ok" });
   }
   return status;
+}
+
+function formatSlot(slot: TermSlot): string {
+  return `${termLabels[slot.term]} 周${"一二三四五六日"[slot.dayOfWeek - 1]} ${slot.period} 节`;
+}
+
+function formatSectionTime(section: Section): string {
+  if (section.slots.length === 0) {
+    return "时间未知";
+  }
+  return section.slots.map(formatSlot).join(" / ");
+}
+
+function countIncompleteSections(courses: Course[]): number {
+  return courses
+    .flatMap((course) => course.sections)
+    .filter((section) => section.examTime === null || section.credits === null).length;
 }
 
 export function ImportExportPage({
@@ -43,54 +76,92 @@ export function ImportExportPage({
 }: ImportExportPageProps) {
   const sections = catalog?.courses.flatMap((course) => course.sections) ?? [];
   const exportPreview = session ? formatExportEnvelopePreview(buildExportEnvelope(session)) : null;
+  const incompleteCount = catalog ? countIncompleteSections(catalog.courses) : 0;
 
   return (
-    <section className="space-y-5 p-6">
-      <h2 className="text-lg font-bold">导入 / 导出（Task 2 交付）</h2>
-      <p className="mt-2 text-sm text-gray-500">
-        内置 Demo 数据 / JSON 导入与错误定位 / 导出当前 JSON —— 见 docs/08 §5.1。
-      </p>
+    <section className="page-shell page-stack" aria-labelledby="import-heading">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 id="import-heading" className="text-2xl font-semibold tracking-[-0.015em] text-ink">
+            导入 / 导出
+          </h1>
+          <p className="mt-2 max-w-[65ch] text-[13.5px] leading-6 text-ink-muted">
+            加载合成 Demo 数据，预览 session 草稿和 export.v1。全程不访问 zdbk、chalaoshi 或 LLM。
+          </p>
+        </div>
+        <p className="font-mono text-[12px] text-ink-faint">catalog.v1 · session.v1 · export.v1</p>
+      </div>
 
-      <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50 p-4">
-        <h3 className="font-semibold text-blue-950">Demo mainline 入口</h3>
-        <p className="mt-1 text-sm text-blue-900">
-          这里先只加载仓库内的合成 fixture，用来打通演示主线；不会访问 zdbk、chalaoshi 或
-          LLM，也不会伪装成真实推荐。
-        </p>
+      <div className="blue-panel grid gap-5 p-5 md:grid-cols-[1fr_auto] md:items-center">
+        <div>
+          <p className="text-[13px] font-semibold text-blue-ink">Demo mainline 入口</p>
+          <h2 className="mt-1 text-[18px] font-semibold tracking-[-0.01em] text-ink">
+            用合成数据打通展示主线
+          </h2>
+          <p className="mt-2 max-w-[62ch] text-[13.5px] leading-6 text-blue-ink">
+            不访问 zdbk/chalaoshi/LLM，不伪装真实推荐。缺少考试时间或学分的教学班会明确留在待选池。
+          </p>
+        </div>
         <button
           type="button"
-          className="mt-3 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+          className="primary-button w-full px-4 py-3 md:w-auto"
           onClick={() => void onLoadDemoCatalog(getSyntheticDemoCatalog())}
         >
-          加载合成 Demo 数据
+          {catalog ? "已加载 · 重新加载合成 Demo 数据" : "加载合成 Demo 数据"}
         </button>
       </div>
 
       {session ? (
-        <div className="rounded-lg border bg-white p-4">
-          <p className="text-sm font-semibold text-indigo-700">当前 session 草稿</p>
-          <h3 className="mt-1 font-semibold">{session.name}</h3>
-          <p className="mt-1 text-sm text-gray-600">
-            待选池：{session.pool.targets.length} 门课程 / {countSessionPoolSections(session)}{" "}
-            个候选教学班
-          </p>
-          <p className="mt-1 text-sm text-gray-600">
-            学分上限：{session.rules.creditLimit ?? "未填写"}
-          </p>
-          <p className="mt-1 text-xs text-gray-500">
-            baseline 从本次合成导入创建；当前 plan 为空，等待 selection-model 输出。
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded bg-gray-900 px-3 py-2 text-sm text-white"
-              onClick={onOpenWishPlan}
-            >
+        <div className="panel p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-[13px] font-semibold text-blue-strong">当前 session 草稿</p>
+              <h3 className="mt-1 text-xl font-semibold tracking-[-0.01em] text-ink">
+                {session.name}
+              </h3>
+              <p className="mt-2 text-[13px] leading-6 text-ink-muted">
+                baseline 从本次合成导入创建；当前 plan 为空，等待 selection-model 输出。
+              </p>
+            </div>
+            <span className="pill pill-blue px-3 py-1.5">合成数据</span>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[12px] bg-card-alt p-4">
+              <p className="text-[11.5px] font-semibold text-ink-faint">待选池课程</p>
+              <p className="mt-1 font-mono text-2xl font-semibold text-ink">
+                {session.pool.targets.length}
+              </p>
+            </div>
+            <div className="rounded-[12px] bg-card-alt p-4">
+              <p className="text-[11.5px] font-semibold text-ink-faint">候选教学班</p>
+              <p className="mt-1 font-mono text-2xl font-semibold text-ink">
+                {countSessionPoolSections(session)}
+              </p>
+            </div>
+            <div className="rounded-[12px] bg-card-alt p-4">
+              <p className="text-[11.5px] font-semibold text-ink-faint">学分上限</p>
+              <p className="mt-1 font-mono text-2xl font-semibold text-ink">
+                {session.rules.creditLimit ?? "未填写"}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-1 text-[13.5px] text-ink-body">
+            <p>
+              待选池：{session.pool.targets.length} 门课程 / {countSessionPoolSections(session)}{" "}
+              个候选教学班
+            </p>
+            <p>学分上限：{session.rules.creditLimit ?? "未填写"}</p>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button type="button" className="primary-button px-4 py-2.5" onClick={onOpenWishPlan}>
               进入待筛选志愿
             </button>
             <button
               type="button"
-              className="rounded border border-gray-300 px-3 py-2 text-sm"
+              className="secondary-button px-4 py-2.5"
               onClick={onOpenTimetable}
             >
               查看预期课表
@@ -100,57 +171,82 @@ export function ImportExportPage({
       ) : null}
 
       {exportPreview ? (
-        <div className="rounded-lg border bg-white p-4">
-          <h3 className="font-semibold">JSON 导出预览（export.v1）</h3>
-          <p className="mt-1 text-sm text-gray-600">
-            仅展示预览，不提供复制或下载按钮。正式导出/再导入往返由后续 Task 2 接入。
-          </p>
-          <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            <p className="font-medium">隐私提示：预览只包含当前 session 规划数据。</p>
+        <div className="panel p-5">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-[15px] font-semibold text-ink">JSON 导出预览（export.v1）</h3>
+              <p className="mt-1 text-[13px] leading-6 text-ink-muted">
+                仅展示预览，不提供复制或下载按钮。正式导出/再导入往返由后续 Task 2 接入。
+              </p>
+            </div>
+            <span className="pill pill-neutral px-3 py-1.5 font-mono">preview only</span>
+          </div>
+          <div className="mt-4 rounded-[12px] border border-blue-soft-border bg-blue-soft p-4 text-[13px] leading-6 text-blue-ink">
+            <p className="font-semibold">隐私提示：预览只包含当前 session 规划数据。</p>
             <p className="mt-1">不包含 API key、Cookie、zdbk token 或学号姓名。</p>
             <p className="mt-1">不会上传到服务端，也不会写入 zdbk。</p>
           </div>
-          <pre className="mt-3 max-h-80 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-100">
+          <pre className="mono-preview mt-4 max-h-80 overflow-auto p-4 text-[12px] leading-5">
             {exportPreview}
           </pre>
         </div>
       ) : null}
 
       {catalog ? (
-        <div className="space-y-4">
-          <div className="rounded-lg border bg-white p-4">
-            <p className="text-sm font-semibold text-emerald-700">合成演示数据</p>
-            <p className="mt-1 text-sm text-gray-600">
-              已加载 {catalog.courses.length} 门课程 / {sections.length} 个教学班；生成时间：
-              {catalog.generatedAt}
-            </p>
+        <div className="grid gap-4">
+          <div className="panel p-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-[13px] font-semibold text-ok">合成演示数据</p>
+                <p className="mt-1 text-[13.5px] leading-6 text-ink-muted">
+                  已加载 {catalog.courses.length} 门课程 / {sections.length} 个教学班；生成时间：
+                  {catalog.generatedAt}
+                </p>
+              </div>
+              <span className="pill pill-warn px-3 py-1.5">缺失硬字段：{incompleteCount} 个</span>
+            </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             {catalog.courses.map((course) => (
-              <article key={course.courseCode} className="rounded-lg border bg-white p-4">
-                <h3 className="font-semibold">{course.courseName}</h3>
-                <p className="mt-1 text-xs text-gray-500">
-                  {course.courseCode} · {course.college ?? "学院未知"} ·{" "}
-                  {course.category ?? "分类未知"}
-                </p>
-                <ul className="mt-3 space-y-2">
+              <article key={course.courseCode} className="panel overflow-hidden p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-ink">
+                      {course.courseName}
+                    </h3>
+                    <p className="mt-1 font-mono text-[11.5px] text-ink-faint">
+                      {course.courseCode} · {course.college ?? "学院未知"} ·{" "}
+                      {course.category ?? "分类未知"}
+                    </p>
+                  </div>
+                  <span className="pill pill-neutral px-2.5 py-1">{course.sections.length} 班</span>
+                </div>
+
+                <ul className="mt-4 grid gap-3">
                   {course.sections.map((section) => (
-                    <li key={section.sectionId} className="rounded bg-gray-50 p-3 text-sm">
-                      <div className="font-medium">
-                        {section.sectionId} · {section.teachers.join("、")}
+                    <li key={section.sectionId} className="rounded-[12px] bg-paper-deep p-3.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-[12px] font-semibold text-ink">
+                          {section.sectionId}
+                        </span>
+                        <span className="text-[13px] font-medium text-ink-body">
+                          {section.teachers.join("、")}
+                        </span>
                       </div>
-                      <div className="mt-1 text-xs text-gray-600">
-                        学分：{section.credits ?? "未知"} · 考试：
+                      <p className="mt-2 text-[12.5px] leading-5 text-ink-muted">
+                        {formatSectionTime(section)}；学分：{section.credits ?? "未知"}；考试：
                         {section.examTime?.raw ?? "未知"}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1">
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
                         {sectionStatus(section).map((status) => (
                           <span
-                            key={status}
-                            className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900"
+                            key={status.label}
+                            className={`pill px-2.5 py-1 ${
+                              status.tone === "ok" ? "pill-ok" : "pill-warn"
+                            }`}
                           >
-                            {status}
+                            {status.label}
                           </span>
                         ))}
                       </div>
@@ -162,9 +258,10 @@ export function ImportExportPage({
           </div>
         </div>
       ) : (
-        <p className="rounded-lg border bg-white p-4 text-sm text-gray-600">
-          尚未加载课程数据。请先使用合成 Demo 数据或等待组员 A 的正式导入功能接入。
-        </p>
+        <div className="panel-soft p-5 text-[13.5px] leading-6 text-ink-muted">
+          <p className="font-semibold text-ink">尚未加载课程数据</p>
+          <p className="mt-1">请先使用合成 Demo 数据，或等待组员 A 的正式导入功能接入。</p>
+        </div>
       )}
     </section>
   );
