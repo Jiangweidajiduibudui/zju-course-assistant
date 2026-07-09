@@ -1,5 +1,13 @@
-import type { FastifyInstance } from "fastify";
-import { ErrorCodes } from "../../../shared/contracts/errors.js";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import * as z from "zod";
+import { type ApiError, ErrorCodes } from "../../../shared/contracts/errors.js";
+import { type LlmEndpointConfig, llmEndpointConfigSchema } from "../../../shared/contracts/llm.js";
+import { checkEndpointUrl } from "./ssrf-guard.js";
+import {
+  type StructuredOutputContext,
+  type StructuredTask,
+  validateStructuredOutput,
+} from "./structured-output.js";
 
 /**
  * llm-gateway 模块路由（组员 D；docs/08 §5.1）。
@@ -14,21 +22,163 @@ import { ErrorCodes } from "../../../shared/contracts/errors.js";
  *
  * 成功判据：Task 4 门禁 —— 无 key 不生成推荐；SSRF 样例被拒；
  * LLM 返回不存在 ID 时不改状态（docs/05 §1 LLM 网关安全 + §4 评测集）。
- *
- * 计划端点（Task 4 实现）：
- * - POST /api/llm/capability-check   端点能力检测（D10）
- * - POST /api/llm/review-summary     评论摘要（纯展示，无状态通道，D24）
- * - POST /api/llm/group-ranking      组内排序（阶段③）
- * - POST /api/llm/plan-comparison    Top10 方案比较（阶段⑤）
- * - POST /api/llm/preference         偏好结构化（确认制）
- * - POST /api/llm/explain            解释
  */
 export async function llmGatewayRoutes(app: FastifyInstance): Promise<void> {
-  const notImplemented = { errorCode: ErrorCodes.COMMON_NOT_IMPLEMENTED, message: "Task 4 交付" };
-  app.post("/capability-check", async (_req, reply) => reply.code(501).send(notImplemented));
-  app.post("/review-summary", async (_req, reply) => reply.code(501).send(notImplemented));
-  app.post("/group-ranking", async (_req, reply) => reply.code(501).send(notImplemented));
-  app.post("/plan-comparison", async (_req, reply) => reply.code(501).send(notImplemented));
-  app.post("/preference", async (_req, reply) => reply.code(501).send(notImplemented));
-  app.post("/explain", async (_req, reply) => reply.code(501).send(notImplemented));
+  app.post("/capability-check", async (req, reply) => {
+    const preflight = preflightLlmRequest(req.body, { requireStructuredCapability: false });
+    if (!preflight.ok) {
+      return sendError(reply, preflight.statusCode, preflight.error);
+    }
+
+    return reply.send({
+      ok: true,
+      endpointAllowed: true,
+      // 低门槛 D 阶段只做本地配置/安全预检，不伪造真实上游探测结论。
+      checked: "local-config-only",
+      capability: preflight.endpoint.capability,
+    });
+  });
+
+  registerStructuredTaskRoute(app, "/review-summary", "review-summary");
+  registerStructuredTaskRoute(app, "/group-ranking", "group-ranking");
+  registerStructuredTaskRoute(app, "/plan-comparison", "plan-comparison");
+  registerStructuredTaskRoute(app, "/preference", "preference");
+  registerStructuredTaskRoute(app, "/explain", "explain");
+}
+
+const llmEnvelopeSchema = z
+  .object({
+    llm: z
+      .object({
+        apiKey: z.string().optional(),
+        endpoint: llmEndpointConfigSchema.optional(),
+      })
+      .optional(),
+    apiKey: z.string().optional(),
+    endpoint: llmEndpointConfigSchema.optional(),
+    input: z
+      .object({
+        groupSectionIds: z.record(z.string(), z.array(z.string().min(1))).optional(),
+        allowedSectionIds: z.array(z.string().min(1)).optional(),
+        planIds: z.array(z.string().min(1)).optional(),
+      })
+      .passthrough()
+      .optional(),
+    output: z.unknown().optional(),
+    rawOutput: z.unknown().optional(),
+  })
+  .passthrough();
+
+type LlmEnvelope = z.infer<typeof llmEnvelopeSchema>;
+
+type PreflightResult =
+  | { ok: true; body: LlmEnvelope; endpoint: LlmEndpointConfig; apiKey: string }
+  | { ok: false; statusCode: number; error: ApiError };
+
+function registerStructuredTaskRoute(
+  app: FastifyInstance,
+  path: string,
+  task: StructuredTask,
+): void {
+  app.post(path, async (req, reply) => {
+    const preflight = preflightLlmRequest(req.body, { requireStructuredCapability: true });
+    if (!preflight.ok) {
+      return sendError(reply, preflight.statusCode, preflight.error);
+    }
+
+    const output = preflight.body.output ?? preflight.body.rawOutput;
+    const validated = validateStructuredOutput(
+      task,
+      output,
+      extractStructuredContext(preflight.body),
+    );
+    if (!validated.ok) {
+      return sendError(reply, 422, {
+        errorCode: validated.errorCode,
+        message: validated.message,
+        details: validated.details,
+      });
+    }
+
+    return reply.send({ ok: true, task, output: validated.output });
+  });
+}
+
+function preflightLlmRequest(
+  rawBody: unknown,
+  options: { requireStructuredCapability: boolean },
+): PreflightResult {
+  const parsed = llmEnvelopeSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: {
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "LLM 请求体不符合网关 envelope",
+        details: z.treeifyError(parsed.error),
+      },
+    };
+  }
+
+  const endpoint = parsed.data.llm?.endpoint ?? parsed.data.endpoint;
+  if (endpoint === undefined) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: {
+        errorCode: ErrorCodes.COMMON_VALIDATION_FAILED,
+        message: "缺少 LLM endpoint 配置",
+      },
+    };
+  }
+
+  const endpointVerdict = checkEndpointUrl(endpoint.baseUrl);
+  if (!endpointVerdict.allowed) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: {
+        errorCode: endpointVerdict.errorCode ?? ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF,
+        message: endpointVerdict.reason ?? "LLM endpoint 被安全策略拒绝",
+      },
+    };
+  }
+
+  const apiKey = (parsed.data.llm?.apiKey ?? parsed.data.apiKey ?? "").trim();
+  if (apiKey.length === 0) {
+    return {
+      ok: false,
+      statusCode: 401,
+      error: {
+        errorCode: ErrorCodes.LLM_KEY_MISSING,
+        message: "未配置 LLM key，推荐类任务不可用",
+      },
+    };
+  }
+
+  if (options.requireStructuredCapability && endpoint.capability !== "structured") {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: {
+        errorCode: ErrorCodes.LLM_CAPABILITY_INSUFFICIENT,
+        message: "当前端点未声明支持结构化输出",
+      },
+    };
+  }
+
+  return { ok: true, body: parsed.data, endpoint, apiKey };
+}
+
+function extractStructuredContext(body: LlmEnvelope): StructuredOutputContext {
+  return {
+    groupSectionIds: body.input?.groupSectionIds,
+    allowedSectionIds: body.input?.allowedSectionIds,
+    planIds: body.input?.planIds,
+  };
+}
+
+function sendError(reply: FastifyReply, statusCode: number, error: ApiError) {
+  return reply.code(statusCode).send(error);
 }
