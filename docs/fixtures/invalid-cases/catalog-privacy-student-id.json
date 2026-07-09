@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN903",
+      "courseName": "合成非法样例·含学号",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN903-01",
+          "courseCode": "SYN903",
+          "courseName": "合成非法样例·含学号",
+          "teachers": ["演示教师"],
+          "slots": [],
+          "place": "学号: 3230101234",
+          "examTime": null,
+          "credits": 1
+        }
+      ]
+    }
+  ]
+}

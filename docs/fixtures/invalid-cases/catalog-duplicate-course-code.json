@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "SYN904",
+      "courseName": "合成重复课程甲",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN904-01",
+          "courseCode": "SYN904",
+          "courseName": "合成重复课程甲",
+          "teachers": ["演示教师"],
+          "slots": [],
+          "place": null,
+          "examTime": null,
+          "credits": 1
+        }
+      ]
+    },
+    {
+      "courseCode": "SYN904",
+      "courseName": "合成重复课程乙",
+      "college": null,
+      "category": null,
+      "sections": [
+        {
+          "sectionId": "SYN904-02",
+          "courseCode": "SYN904",
+          "courseName": "合成重复课程乙",
+          "teachers": ["演示教师"],
+          "slots": [],
+          "place": null,
+          "examTime": null,
+          "credits": 1
+        }
+      ]
+    }
+  ]
+}

@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildExportEnvelope,
   listIncompleteSectionIds,
+  normalizeCatalog,
   parseBaselineWithCatalog,
   parseCatalogExportBundle,
   parseCatalogJson,
   parseExportEnvelopeJson,
   parsePoolWithCatalog,
+  splitTeachers,
   validateSessionSectionRefs,
 } from "../../src/server/modules/import/service.js";
 import { ErrorCodes } from "../../src/shared/contracts/errors.js";
@@ -115,6 +117,63 @@ describe("parseCatalogJson", () => {
     const incomplete = listIncompleteSectionIds(result.catalog);
     expect(incomplete).toContain("SYN201-02"); // examTime null
     expect(incomplete).toContain("SYN301-01"); // credits null
+  });
+
+  it("疑似学号 → IMPORT_PRIVACY_SUSPECT", () => {
+    const result = parseCatalogJson(
+      readFixture("invalid-cases", "catalog-privacy-student-id.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_PRIVACY_SUSPECT)).toBe(true);
+      expect(result.issues.some((i) => i.path.includes("place"))).toBe(true);
+    }
+  });
+
+  it("重复 courseCode → IMPORT_SCHEMA_MISMATCH", () => {
+    const result = parseCatalogJson(
+      readFixture("invalid-cases", "catalog-duplicate-course-code.json"),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.code === ErrorCodes.IMPORT_SCHEMA_MISMATCH)).toBe(true);
+      expect(result.issues.some((i) => i.path.includes("courseCode"))).toBe(true);
+    }
+  });
+});
+
+describe("catalog 规范化", () => {
+  it("splitTeachers 拆分 br 与换行", () => {
+    expect(splitTeachers(["甲<br>乙", "丙\n丁", "  "])).toEqual(["甲", "乙", "丙", "丁"]);
+  });
+
+  it("trim、拆师、section 与课程字段对齐", () => {
+    const result = parseCatalogJson(readFixture("catalog-normalize-teachers.synthetic.json"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const course = result.catalog.courses[0];
+    const section = course?.sections[0];
+    expect(course?.courseCode).toBe("SYN905");
+    expect(course?.courseName).toBe("合成规范化演示");
+    expect(course?.college).toBe("演示学院");
+    expect(section?.sectionId).toBe("SYN905-01");
+    expect(section?.courseCode).toBe("SYN905");
+    expect(section?.courseName).toBe("合成规范化演示");
+    expect(section?.teachers).toEqual(["演示教师甲", "演示教师乙", "演示教师丙"]);
+    expect(section?.place).toBe("演示楼-905");
+    expect(section?.examTime?.examKey).toBe("2026W-EXAM-N");
+    expect(section?.unverifiedRaw).toEqual({ rs: "10/20" });
+  });
+
+  it("normalizeCatalog 对已规范数据保持稳定", () => {
+    const result = parseCatalogJson(readFixture("demo-catalog.synthetic.json"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(normalizeCatalog(result.catalog)).toEqual(result.catalog);
   });
 });
 

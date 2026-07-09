@@ -87,8 +87,171 @@ export function parseCatalogJson(text: string): ImportResult {
   if (dupIssues.length > 0) {
     return { ok: false, issues: dupIssues };
   }
-  return { ok: true, catalog: parsed.data };
+  const privacyIssues = findPrivacySuspectIssues(parsed.data);
+  if (privacyIssues.length > 0) {
+    return { ok: false, issues: privacyIssues };
+  }
+  const catalog = normalizeCatalog(parsed.data);
+  const consistencyIssues = findCatalogConsistencyIssues(catalog);
+  if (consistencyIssues.length > 0) {
+    return { ok: false, issues: consistencyIssues };
+  }
+  // 再跑一遍 Schema，确保规范化后仍合法（如教师拆分后为空）
+  const reparsed = catalogSchema.safeParse(catalog);
+  if (!reparsed.success) {
+    return { ok: false, issues: zodIssuesToImportIssues(reparsed.error) };
+  }
+  return { ok: true, catalog: reparsed.data };
 }
+
+/**
+ * 规范化 catalog（字段修正，docs/08 §5.1）：
+ * - 字符串 trim；
+ * - teachers 按 `<br>` / `<br/>` / 换行拆分并去空；
+ * - section.courseCode / courseName 与所属课程对齐（以课程为准）。
+ */
+export function normalizeCatalog(catalog: Catalog): Catalog {
+  return {
+    ...catalog,
+    courses: catalog.courses.map((course) => {
+      const courseCode = course.courseCode.trim();
+      const courseName = course.courseName.trim();
+      return {
+        ...course,
+        courseCode,
+        courseName,
+        college: course.college === null ? null : course.college.trim() || null,
+        category: course.category === null ? null : course.category.trim() || null,
+        sections: course.sections.map((section) => ({
+          ...section,
+          sectionId: section.sectionId.trim(),
+          courseCode,
+          courseName,
+          teachers: splitTeachers(section.teachers),
+          place: section.place === null ? null : section.place.trim() || null,
+          examTime:
+            section.examTime === null
+              ? null
+              : {
+                  examKey: section.examTime.examKey.trim(),
+                  raw: section.examTime.raw.trim(),
+                },
+          unverifiedRaw: section.unverifiedRaw
+            ? Object.fromEntries(
+                Object.entries(section.unverifiedRaw).map(([key, value]) => [
+                  key.trim(),
+                  value.trim(),
+                ]),
+              )
+            : undefined,
+        })),
+      };
+    }),
+  };
+}
+
+/** 拆分 zdbk 风格多师字符串（`<br>` / 换行）；已是单名则 trim */
+export function splitTeachers(teachers: string[]): string[] {
+  const parts: string[] = [];
+  for (const raw of teachers) {
+    for (const piece of raw.split(/<br\s*\/?>|\n|\r/i)) {
+      const name = piece.trim();
+      if (name.length > 0) {
+        parts.push(name);
+      }
+    }
+  }
+  return parts;
+}
+
+/**
+ * catalog 内部一致性：同一 courseCode 不得重复出现。
+ * （section 与课程的 code/name 已在 normalize 中对齐）
+ */
+export function findCatalogConsistencyIssues(catalog: Catalog): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  const seenCourse = new Map<string, number>();
+  catalog.courses.forEach((course, ci) => {
+    const prev = seenCourse.get(course.courseCode);
+    if (prev !== undefined) {
+      issues.push({
+        path: `courses[${ci}].courseCode`,
+        code: ErrorCodes.IMPORT_SCHEMA_MISMATCH,
+        message: `课程代码 ${course.courseCode} 与 courses[${prev}] 重复`,
+      });
+    } else {
+      seenCourse.set(course.courseCode, ci);
+    }
+  });
+  return issues;
+}
+
+/**
+ * 隐私疑似扫描（D41 / docs/05 未脱敏样例）：命中则拒绝导入，不落库。
+ * 保守规则，避免误杀合成 demo（课程代码/考试 key 中的年份数字不单独触发）。
+ */
+export function findPrivacySuspectIssues(catalog: Catalog): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+
+  const checkString = (path: string, value: string): void => {
+    if (PRIVACY_LABEL_RE.test(value) || PRIVACY_STUDENT_ID_RE.test(value)) {
+      issues.push({
+        path,
+        code: ErrorCodes.IMPORT_PRIVACY_SUSPECT,
+        message: "疑似包含学号/隐私标识，已拒绝导入",
+      });
+    }
+    if (PRIVACY_COOKIE_RE.test(value)) {
+      issues.push({
+        path,
+        code: ErrorCodes.IMPORT_PRIVACY_SUSPECT,
+        message: "疑似包含 Cookie/会话片段，已拒绝导入",
+      });
+    }
+  };
+
+  const checkKey = (path: string, key: string): void => {
+    if (PRIVACY_KEY_RE.test(key)) {
+      issues.push({
+        path,
+        code: ErrorCodes.IMPORT_PRIVACY_SUSPECT,
+        message: `字段名疑似隐私相关（${key}），已拒绝导入`,
+      });
+    }
+  };
+
+  catalog.courses.forEach((course, ci) => {
+    checkString(`courses[${ci}].courseName`, course.courseName);
+    if (course.college) {
+      checkString(`courses[${ci}].college`, course.college);
+    }
+    course.sections.forEach((section, si) => {
+      const base = `courses[${ci}].sections[${si}]`;
+      checkString(`${base}.courseName`, section.courseName);
+      section.teachers.forEach((teacher, ti) => {
+        checkString(`${base}.teachers[${ti}]`, teacher);
+      });
+      if (section.place) {
+        checkString(`${base}.place`, section.place);
+      }
+      if (section.unverifiedRaw) {
+        for (const [key, value] of Object.entries(section.unverifiedRaw)) {
+          checkKey(`${base}.unverifiedRaw.${key}`, key);
+          checkString(`${base}.unverifiedRaw.${key}`, value);
+        }
+      }
+    });
+  });
+
+  return issues;
+}
+
+/** 学号/隐私标签（含「学号: 3230101234」类） */
+const PRIVACY_LABEL_RE = /学号\s*[:：]?\s*\d{6,12}/;
+/** 独立 8–12 位纯数字（常见学号长度）；不匹配含字母的考试 key */
+const PRIVACY_STUDENT_ID_RE = /(?:^|[^\dA-Za-z])(\d{8,12})(?:$|[^\dA-Za-z])/;
+const PRIVACY_COOKIE_RE = /(?:^|[;\s])(?:session|sid|token|jwt)=[^;\s]+/i;
+const PRIVACY_KEY_RE = /^(cookie|password|passwd|token|authorization|学号|student[_-]?id|xsid)$/i;
 
 /** 解析 export.v1 信封（仅 Schema；section 引用需配合 catalog 校验） */
 export function parseExportEnvelopeJson(text: string): ExportParseResult {

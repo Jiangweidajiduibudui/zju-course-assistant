@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "catalog.v1",
+  "synthetic": true,
+  "generatedAt": "2026-07-09T12:00:00.000+08:00",
+  "courses": [
+    {
+      "courseCode": "  SYN905  ",
+      "courseName": "  合成规范化演示  ",
+      "college": "  演示学院  ",
+      "category": "  演示-选修  ",
+      "sections": [
+        {
+          "sectionId": "  SYN905-01  ",
+          "courseCode": "WRONG-CODE",
+          "courseName": "错挂课名",
+          "teachers": ["演示教师甲<br>演示教师乙", "  演示教师丙  "],
+          "slots": [{ "term": "autumn", "dayOfWeek": 1, "period": 1 }],
+          "place": "  演示楼-905  ",
+          "examTime": {
+            "examKey": "  2026W-EXAM-N  ",
+            "raw": "  2027-01-25 08:00-10:00  "
+          },
+          "credits": 2,
+          "unverifiedRaw": { " rs ": " 10/20 " }
+        }
+      ]
+    }
+  ]
+}
