@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { SolverInput } from "../../src/domain/selection-model/index.js";
 import {
   assessSchedulability,
+  buildVolunteerGroups,
   classTimesOverlap,
+  enumerateTopPlans,
   estimateRisk,
   finalValidate,
   timeslotKey,
@@ -354,5 +356,89 @@ describe("终校验基础硬约束（Task 1 / C1）", () => {
     expect(result.kind === "invalid" ? result.conflicts[0]?.errorCode : null).toBe(
       ErrorCodes.MODEL_LOCK_VIOLATION,
     );
+  });
+});
+
+describe("志愿组 Top3 与候选枚举（Task 1 / C2）", () => {
+  it("课程志愿组超过 3 个候选时，按 LLM GroupOrdering 选出最优 3 个并保留顺序", () => {
+    const sections = [
+      section({ sectionId: "sec-1", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-2", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-3", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-4", courseCode: "COURSE_A" }),
+    ];
+    const input = inputFor(sections, {
+      poolTargets: [
+        { courseCode: "COURSE_A", candidateSectionIds: ["sec-1", "sec-2", "sec-3", "sec-4"] },
+      ],
+    });
+
+    const groups = buildVolunteerGroups(input, [
+      { groupId: "course:COURSE_A", orderedSectionIds: ["sec-4", "sec-2", "sec-3", "sec-1"] },
+    ]);
+
+    expect(groups).toEqual([
+      {
+        groupId: "course:COURSE_A",
+        kind: "course",
+        ref: "COURSE_A",
+        orderedSectionIds: ["sec-4", "sec-2", "sec-3"],
+        invalidated: null,
+      },
+    ]);
+  });
+
+  it("LLM GroupOrdering 引用组外教学班时，枚举失败且不生成部分方案", () => {
+    const sections = [
+      section({ sectionId: "sec-1", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-2", courseCode: "COURSE_A" }),
+      section({ sectionId: "sec-outside", courseCode: "COURSE_B" }),
+    ];
+    const input = inputFor(sections, {
+      poolTargets: [{ courseCode: "COURSE_A", candidateSectionIds: ["sec-1", "sec-2"] }],
+    });
+
+    const result = enumerateTopPlans(input, [
+      { groupId: "course:COURSE_A", orderedSectionIds: ["sec-1", "sec-outside"] },
+    ]);
+
+    expect(result.kind).toBe("infeasible");
+    expect(result.kind === "infeasible" ? result.conflicts[0]?.errorCode : null).toBe(
+      ErrorCodes.LLM_ID_OUT_OF_INPUT,
+    );
+  });
+
+  it("枚举出的候选方案使用 LLM Top3 顺序，且能通过 finalValidate", () => {
+    const sections = [
+      section({ sectionId: "sec-1", courseCode: "COURSE_A", credits: 3 }),
+      section({ sectionId: "sec-2", courseCode: "COURSE_A", credits: 3 }),
+      section({ sectionId: "sec-3", courseCode: "COURSE_A", credits: 3 }),
+      section({ sectionId: "sec-4", courseCode: "COURSE_A", credits: 3 }),
+    ];
+    const input = inputFor(sections, {
+      creditLimit: 6,
+      poolTargets: [
+        { courseCode: "COURSE_A", candidateSectionIds: ["sec-1", "sec-2", "sec-3", "sec-4"] },
+      ],
+    });
+
+    const result = enumerateTopPlans(input, [
+      { groupId: "course:COURSE_A", orderedSectionIds: ["sec-4", "sec-2", "sec-3", "sec-1"] },
+    ]);
+
+    expect(result.kind).toBe("plans");
+    if (result.kind !== "plans") {
+      return;
+    }
+
+    expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]?.volunteers.map((item) => [item.sectionId, item.rank])).toEqual([
+      ["sec-4", 1],
+      ["sec-2", 2],
+      ["sec-3", 3],
+    ]);
+    expect(result.plans[0] ? finalValidate(input, result.plans[0]) : null).toEqual({
+      kind: "valid",
+    });
   });
 });
