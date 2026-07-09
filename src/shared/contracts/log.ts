@@ -27,6 +27,8 @@ export const logEventSchema = z.object({
   status: z.enum(["ok", "failed", "cancelled", "skipped"]),
   durationMs: z.number().nonnegative().nullable(),
   errorCode: z.string().nullable(),
+  /** chalaoshi 降级观测：seed/stale 成功响应时记录，便于与 live/cached 区分 */
+  cacheState: z.enum(["live", "cached", "stale", "seed"]).nullable().optional(),
   schemaVersion: z.literal("log.v1"),
 });
 
