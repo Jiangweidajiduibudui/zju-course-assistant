@@ -153,10 +153,67 @@ function orderTargetCandidates(
   const orderedFromLlm =
     ordering?.orderedSectionIds.filter((sectionId) => candidateSet.has(sectionId)) ?? [];
   const orderedSet = new Set(orderedFromLlm);
-  return uniqueSectionIds([
+  const orderedSectionIds = uniqueSectionIds([
     ...orderedFromLlm,
     ...target.candidateSectionIds.filter((sectionId) => !orderedSet.has(sectionId)),
   ]).filter((sectionId) => input.sections.has(sectionId));
+
+  return prioritizeLockedCandidates(input, target, orderedSectionIds);
+}
+
+function prioritizeLockedCandidates(
+  input: SolverInput,
+  target: SolverInput["pool"]["targets"][number],
+  orderedSectionIds: readonly SectionId[],
+): SectionId[] {
+  const orderedSet = new Set(orderedSectionIds);
+  const targetCandidateSet = new Set(target.candidateSectionIds);
+  const rankedLockByRank = new Map<number, SectionId>();
+  const rankedLockIds = new Set<SectionId>();
+
+  for (const baselineVolunteer of input.baseline.volunteers) {
+    if (
+      !targetCandidateSet.has(baselineVolunteer.sectionId) ||
+      !orderedSet.has(baselineVolunteer.sectionId)
+    ) {
+      continue;
+    }
+
+    if (!rankedLockByRank.has(baselineVolunteer.rank)) {
+      rankedLockByRank.set(baselineVolunteer.rank, baselineVolunteer.sectionId);
+    }
+    rankedLockIds.add(baselineVolunteer.sectionId);
+  }
+
+  const manualLockedSectionIds = orderedSectionIds.filter(
+    (sectionId) => input.lockedSectionIds.has(sectionId) && !rankedLockIds.has(sectionId),
+  );
+  const lockedSectionIds = new Set([...rankedLockIds, ...manualLockedSectionIds]);
+  const unlockedSectionIds = orderedSectionIds.filter(
+    (sectionId) => !lockedSectionIds.has(sectionId),
+  );
+  const prefix: SectionId[] = [];
+
+  for (const rank of [1, 2, 3]) {
+    const rankedLock = rankedLockByRank.get(rank);
+    if (rankedLock) {
+      prefix.push(rankedLock);
+      continue;
+    }
+
+    const manualLock = manualLockedSectionIds.shift();
+    if (manualLock) {
+      prefix.push(manualLock);
+      continue;
+    }
+
+    const unlockedSectionId = unlockedSectionIds.shift();
+    if (unlockedSectionId) {
+      prefix.push(unlockedSectionId);
+    }
+  }
+
+  return uniqueSectionIds([...prefix, ...manualLockedSectionIds, ...unlockedSectionIds]);
 }
 
 function buildVolunteerVariants(orderedSectionIds: readonly SectionId[]): SectionId[][] {

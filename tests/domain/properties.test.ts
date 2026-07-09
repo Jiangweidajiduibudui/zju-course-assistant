@@ -59,7 +59,24 @@ describe("selection-model 性质（对任意随机输入必须成立）", () => 
       { numRuns: 100, seed: 20260710 },
     );
   });
-  it.todo("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）");
+  it("3. 锁定保持：已选固定、已填志愿锁定、手动锁定不变（AC-6.1/6.2/7.1）", async () => {
+    await fc.assert(
+      fc.asyncProperty(lockedSolverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
+        const result = enumerateTopPlans(input, groupOrderings, 10);
+
+        expect(result.kind).toBe("plans");
+        if (result.kind === "infeasible") {
+          return;
+        }
+
+        for (const candidate of result.plans) {
+          expect(finalValidate(input, candidate)).toEqual({ kind: "valid" });
+          expectCandidateToPreserveLocks(input, candidate);
+        }
+      }),
+      { numRuns: 100, seed: 20260715 },
+    );
+  });
   it("4. 硬约束满足：学分上限/考试/锁定/志愿组全过；无解给出冲突来源且不放松（AC-5.2）", async () => {
     await fc.assert(
       fc.asyncProperty(solverInputCaseArbitrary(), async ({ input, groupOrderings }) => {
@@ -254,6 +271,53 @@ function buildGeneratedCase(
   };
 }
 
+function lockedSolverInputCaseArbitrary(): fc.Arbitrary<GeneratedCase> {
+  return fc
+    .array(fc.integer({ min: 1, max: 5 }), { minLength: 0, maxLength: 3 })
+    .map((extraSectionCounts) => {
+      const courses: GeneratedCourse[] = [
+        { courseCode: "COURSE_LOCKED" as CourseCode, sectionCount: 4 },
+        ...extraSectionCounts.map((sectionCount, index) => ({
+          courseCode: `COURSE_EXTRA_${index + 1}` as CourseCode,
+          sectionCount,
+        })),
+      ];
+      const generated = buildGeneratedCase(courses, {
+        creditLimit: 99,
+        missingExamIds: [],
+        missingCreditIds: [],
+        conflictingExamIds: [],
+        crowdedSlotIds: [],
+        reversedGroupIds: ["COURSE_LOCKED" as CourseCode],
+      });
+      const selectedFixed = sectionFor({
+        sectionId: "selected-fixed-1" as SectionId,
+        courseCode: "COURSE_SELECTED" as CourseCode,
+        slot: { term: "autumn", dayOfWeek: 7, period: 1 },
+        examKey: "exam-selected-fixed",
+        examMissing: false,
+        creditMissing: false,
+      });
+
+      return {
+        input: {
+          ...generated.input,
+          sections: new Map([
+            ...generated.input.sections,
+            [selectedFixed.sectionId, selectedFixed],
+          ]),
+          baseline: {
+            ...generated.input.baseline,
+            selected: [selectedFixed.sectionId],
+            volunteers: [{ sectionId: sectionIdFor(0, 0), rank: 1 }],
+          },
+          lockedSectionIds: new Set<SectionId>([sectionIdFor(0, 1)]),
+        },
+        groupOrderings: generated.groupOrderings,
+      };
+    });
+}
+
 function sectionFor(input: {
   sectionId: SectionId;
   courseCode: CourseCode;
@@ -408,5 +472,27 @@ function expectVolunteerCountsByTimeslotToBeAtMostThree(
 
   for (const count of countByTimeslot.values()) {
     expect(count).toBeLessThanOrEqual(3);
+  }
+}
+
+function expectCandidateToPreserveLocks(input: SolverInput, candidate: CandidatePlan): void {
+  const volunteerBySectionId = new Map(
+    candidate.volunteers.map((volunteer) => [volunteer.sectionId, volunteer]),
+  );
+
+  for (const selectedSectionId of input.baseline.selected) {
+    expect(volunteerBySectionId.has(selectedSectionId)).toBe(false);
+  }
+
+  for (const baselineVolunteer of input.baseline.volunteers) {
+    expect(volunteerBySectionId.get(baselineVolunteer.sectionId)?.rank).toBe(
+      baselineVolunteer.rank,
+    );
+  }
+
+  for (const lockedSectionId of input.lockedSectionIds) {
+    const volunteer = volunteerBySectionId.get(lockedSectionId);
+    expect(volunteer).toBeDefined();
+    expect(volunteer?.locked).toBe(true);
   }
 }
