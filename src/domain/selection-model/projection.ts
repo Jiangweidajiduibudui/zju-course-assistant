@@ -11,9 +11,6 @@ import type { SolverInput } from "./types.js";
  *
  * Task 1 交付；测试锚点：tests/domain/projection.test.ts。
  */
-export function projectTimetable(
-  _input: SolverInput,
-  _plan: CandidatePlan,
-): TimetableProjection {
+export function projectTimetable(_input: SolverInput, _plan: CandidatePlan): TimetableProjection {
   throw new NotImplementedError("projectTimetable", "Task 1");
 }

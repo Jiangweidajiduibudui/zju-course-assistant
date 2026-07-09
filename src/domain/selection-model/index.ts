@@ -6,9 +6,10 @@
  * - 只依赖 src/shared/contracts；禁止 import React、Fastify、Dexie、pg；
  * - 所有硬约束逻辑集中于此，其他模块只能调用，不得复制。
  */
+
+export { enumerateTopPlans } from "./enumerate.js";
 export { NotImplementedError } from "./errors.js";
 export { assessSchedulability } from "./feasibility.js";
-export { enumerateTopPlans } from "./enumerate.js";
 export { reoptimizeWithMinimalChange } from "./perturbation.js";
 export { projectTimetable } from "./projection.js";
 export { estimateRisk } from "./risk.js";

@@ -27,13 +27,15 @@ export function ConsentGate({ children }: { children: ReactNode }) {
       <main className="mx-auto max-w-xl p-8">
         <h1 className="mb-4 text-xl font-bold">首次使用：隐私声明（占位）</h1>
         <p className="mb-4 text-sm text-gray-600">
-          ⚠️ 脚手架占位文案 —— 正式隐私声明在 Task 5 由产品负责人确认后替换，
-          必须覆盖 D04 全部要点。不同意则无法进入产品（D23）。
+          ⚠️ 脚手架占位文案 —— 正式隐私声明在 Task 5 由产品负责人确认后替换， 必须覆盖 D04
+          全部要点。不同意则无法进入产品（D23）。
         </p>
         <button
           type="button"
           className="rounded bg-blue-600 px-4 py-2 text-white"
-          onClick={() => db.kv.put({ key: CONSENT_KEY, value: { agreedAt: new Date().toISOString() } })}
+          onClick={() =>
+            db.kv.put({ key: CONSENT_KEY, value: { agreedAt: new Date().toISOString() } })
+          }
         >
           （开发占位）同意并继续
         </button>

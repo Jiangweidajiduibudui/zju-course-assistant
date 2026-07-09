@@ -1,7 +1,7 @@
+import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
-import type { FastifyInstance } from "fastify";
 
 /** 服务端装配 smoke test：应用可构建、健康检查可用、stub 端点诚实返回 501。 */
 describe("Fastify 应用装配", () => {

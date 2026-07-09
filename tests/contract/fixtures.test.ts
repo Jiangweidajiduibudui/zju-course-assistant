@@ -37,7 +37,8 @@ describe("合成 fixture 契约", () => {
   });
 
   it("fixture 不包含隐私与凭据特征（D41、docs/03 §4）", () => {
-    const all = readFixture("demo-catalog.synthetic.json") + readFixture("demo-chalaoshi.synthetic.json");
+    const all =
+      readFixture("demo-catalog.synthetic.json") + readFixture("demo-chalaoshi.synthetic.json");
     const forbidden: Array<[RegExp, string]> = [
       [/sk-[A-Za-z0-9]{8,}/, "疑似 API key"],
       [/JSESSIONID|iPlanetDirectoryPro/i, "疑似 Cookie/会话令牌"],

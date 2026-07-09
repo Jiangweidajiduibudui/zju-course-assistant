@@ -18,9 +18,7 @@ export interface ImportIssue {
   message: string;
 }
 
-export type ImportResult =
-  | { ok: true; catalog: Catalog }
-  | { ok: false; issues: ImportIssue[] };
+export type ImportResult = { ok: true; catalog: Catalog } | { ok: false; issues: ImportIssue[] };
 
 /** 解析并校验课程目录 JSON 文本；错误逐条定位（AC 见 docs/05 §1 导入校验器） */
 export function parseCatalogJson(text: string): ImportResult {

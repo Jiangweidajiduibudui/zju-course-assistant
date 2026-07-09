@@ -11,9 +11,6 @@ import type { Section } from "../../shared/contracts/index.js";
  *
  * 这不是 stub —— 这是当前的正确实现。解冻须产品负责人在 docs/06 追加决策。
  */
-export function estimateRisk(
-  _section: Section,
-  _context: unknown,
-): { status: "unavailable" } {
+export function estimateRisk(_section: Section, _context: unknown): { status: "unavailable" } {
   return { status: "unavailable" };
 }

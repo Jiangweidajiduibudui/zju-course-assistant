@@ -10,7 +10,11 @@ import * as z from "zod";
  */
 export const courseCodeSchema = z.string().min(1).describe("课程代码（kcdm）");
 export const sectionIdSchema = z.string().min(1).describe("教学班唯一标识（xkkh）");
-export const chalaoshiTeacherIdSchema = z.number().int().nonnegative().describe("chalaoshi 教师 id");
+export const chalaoshiTeacherIdSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .describe("chalaoshi 教师 id");
 
 export type CourseCode = z.infer<typeof courseCodeSchema>;
 export type SectionId = z.infer<typeof sectionIdSchema>;

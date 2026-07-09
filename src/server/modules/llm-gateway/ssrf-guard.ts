@@ -13,7 +13,9 @@ import { ErrorCodes } from "../../../shared/contracts/errors.js";
  */
 export interface SsrfVerdict {
   allowed: boolean;
-  errorCode?: typeof ErrorCodes.LLM_ENDPOINT_NOT_HTTPS | typeof ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF;
+  errorCode?:
+    | typeof ErrorCodes.LLM_ENDPOINT_NOT_HTTPS
+    | typeof ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF;
   reason?: string;
 }
 
@@ -29,7 +31,11 @@ export function checkEndpointUrl(rawUrl: string): SsrfVerdict {
     return { allowed: false, errorCode: ErrorCodes.LLM_ENDPOINT_NOT_HTTPS, reason: "仅允许 HTTPS" };
   }
   if (url.port !== "" && url.port !== "443") {
-    return { allowed: false, errorCode: ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF, reason: "仅允许 443 端口" };
+    return {
+      allowed: false,
+      errorCode: ErrorCodes.LLM_ENDPOINT_BLOCKED_SSRF,
+      reason: "仅允许 443 端口",
+    };
   }
   // TODO(Task 4, 组员 D): 字面量 IP（IPv4/IPv6/混合写法）与 localhost 判定；
   // 参考 docs/05 §5.1 SSRF 用例矩阵，禁止只做字符串前缀匹配。

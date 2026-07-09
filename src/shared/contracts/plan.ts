@@ -19,9 +19,7 @@ export const volunteerGroupSchema = z.object({
   /** 组内教学班顺位（最多 3 个，顺位 1/2/3；D30） */
   orderedSectionIds: z.array(sectionIdSchema).min(1).max(3),
   /** 组是否失效（如时间槽组被课程组占用）；失效必须给出原因（docs/08 §8.1） */
-  invalidated: z
-    .object({ reason: z.string().min(1), byGroupId: z.string().nullable() })
-    .nullable(),
+  invalidated: z.object({ reason: z.string().min(1), byGroupId: z.string().nullable() }).nullable(),
 });
 export type VolunteerGroup = z.infer<typeof volunteerGroupSchema>;
 

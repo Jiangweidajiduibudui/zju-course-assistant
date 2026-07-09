@@ -51,9 +51,7 @@ export type EnumerationResult =
   | { kind: "infeasible"; conflicts: ConflictReport[] };
 
 /** 终校验结果：任何失败都必须给出稳定错误码（Task 1 门禁） */
-export type ValidationResult =
-  | { kind: "valid" }
-  | { kind: "invalid"; conflicts: ConflictReport[] };
+export type ValidationResult = { kind: "valid" } | { kind: "invalid"; conflicts: ConflictReport[] };
 
 /** 最小扰动重排的变更集（供 UI 高亮，AC-7.2） */
 export interface PlanChangeSet {

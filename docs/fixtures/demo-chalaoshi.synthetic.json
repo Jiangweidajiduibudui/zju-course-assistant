@@ -9,9 +9,7 @@
       "college": "演示学院",
       "rating": 4.6,
       "ratingCount": 128,
-      "gpaByCourse": [
-        { "courseName": "合成微积分演示", "gpa": 3.9, "sampleLabel": "500+" }
-      ],
+      "gpaByCourse": [{ "courseName": "合成微积分演示", "gpa": 3.9, "sampleLabel": "500+" }],
       "callRollPercent": 12,
       "comments": [
         {
@@ -52,9 +50,7 @@
       "college": "演示学院",
       "rating": 3.8,
       "ratingCount": 41,
-      "gpaByCourse": [
-        { "courseName": "合成微积分演示", "gpa": 3.4, "sampleLabel": "100+" }
-      ],
+      "gpaByCourse": [{ "courseName": "合成微积分演示", "gpa": 3.4, "sampleLabel": "100+" }],
       "callRollPercent": 65,
       "comments": [
         {

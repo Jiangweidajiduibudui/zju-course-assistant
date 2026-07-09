@@ -9,7 +9,10 @@ import { type ChalaoshiSeed, chalaoshiSeedSchema } from "../../../shared/contrac
  * 返回数据的 cacheState 一律为 "seed"，UI 必须显式标记"演示数据"。
  * 铁律：seed 文件必须 synthetic:true；真实评论永不入库（Task 3 门禁）。
  */
-const SEED_URL = new URL("../../../../docs/fixtures/demo-chalaoshi.synthetic.json", import.meta.url);
+const SEED_URL = new URL(
+  "../../../../docs/fixtures/demo-chalaoshi.synthetic.json",
+  import.meta.url,
+);
 
 let cached: ChalaoshiSeed | null = null;
 
