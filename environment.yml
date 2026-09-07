@@ -1,0 +1,8 @@
+name: zju-course-assistant
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - nodejs=22.23.2
+  - pnpm=10.33.2
+  - python=3.12.14

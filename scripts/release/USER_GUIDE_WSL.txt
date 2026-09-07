@@ -1,0 +1,33 @@
+ZJU 选课助手 0.1.0-rc.1 — WSL2 x64 验收版
+
+在 WSL2 终端中启动
+1. 将 tar.gz 放入 WSL2，并解压：tar -xzf zju-course-assistant-0.1.0-rc.1-wsl2-x64.tar.gz
+2. 进入解压后的目录：cd zju-course-assistant-0.1.0-rc.1-wsl2-x64
+3. 执行：./start.sh
+4. 在 Windows 浏览器中查看 http://127.0.0.1:4317。默认会尝试自动打开；未打开时手动访问即可。
+5. 保持终端运行，按 Ctrl+C 停止服务。学校 CAS 登录浏览器是独立的 WSLg 窗口。
+
+环境要求
+x86-64 WSL2 和 WSLg；以 Ubuntu 24.04 为验收环境。Windows 需能转发访问 WSL 的 localhost。
+已附带固定版 Linux Node.js、Chromium 和生产依赖，无需 Node、Python 或 Conda 开发环境。
+Linux 系统仍需具备 Chromium 共享库。如果启动或登录浏览器提示缺库，请补齐对应系统依赖。
+可执行 ./start.sh --check 验证包内 Node、SQLite 和 Chromium；该检查不登录学校、不调用模型。
+可执行 ZJU_PORT=4320 ./start.sh 使用其他端口；./start.sh --no-open 不自动打开 Windows 浏览器。
+
+首次使用与个人数据
+首次启动为空白工作区，不含开发者的课程、计划、登录信息、评论或 API key。
+通过“连接教务”打开学校登录窗口，登录并同步课程后新建计划。
+通过“模型设置”配置自己的端点、模型和 API key。key 只在进程内存中保存，重启需重填。
+外部评价需主动启用；仅点击生成摘要才调用模型。同名教师需先确认身份。
+实际选课、退课与志愿调序仍需在学校页面自行完成。
+
+个人数据默认位于 ~/.local/share/zju-course-assistant/data，与解压目录分开。
+升级时更换程序目录；不要用测试数据库覆盖原数据。备份和清理使用“本机数据与备份”。
+卸载时先停止服务，再删除程序目录。如果也要删除全部个人资料，再删除上述 data 目录。
+
+限制
+只监听 127.0.0.1。网络需能访问学校及自行选择的模型/评价服务。
+默认端口被占用时先关闭重复实例，或更换端口；不要结束不认识的进程。
+时间缺失、信息过期或硬约束不满足时可能无法采用方案。本产品不保证录取。
+第三方许可与校验清单见 THIRD_PARTY_NOTICES.txt、runtime/LICENSE 和 FILES.sha256。
+这是待验收包，未公开发布。

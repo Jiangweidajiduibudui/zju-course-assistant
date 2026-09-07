@@ -1,98 +1,288 @@
-import helmet from "@fastify/helmet";
-import rateLimit from "@fastify/rate-limit";
-import Fastify, { type FastifyInstance } from "fastify";
-import { Pool } from "pg";
-import type { ServerConfig } from "./config.js";
-import type { FetchLike } from "./modules/chalaoshi/fetcher.js";
-import type { L2Store } from "./modules/chalaoshi/l2.js";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { z } from "zod";
+import { api, type OperationId } from "../shared/contracts/api.js";
 import {
-  type BuildChalaoshiRoutesOptions,
-  buildChalaoshiRoutes,
-} from "./modules/chalaoshi/routes.js";
-import type { ChalaoshiService } from "./modules/chalaoshi/service.js";
-import { diagnosticsRoutes } from "./modules/diagnostics/routes.js";
-import { importRoutes } from "./modules/import/routes.js";
-import { llmGatewayRoutes } from "./modules/llm-gateway/routes.js";
-import { plannerRoutes } from "./modules/planner/routes.js";
+  CONTRACT_VERSION,
+  errorStatus,
+  Failure,
+  Id,
+  success,
+} from "../shared/contracts/common.js";
+import { ServiceError } from "./errors.js";
+import type { Transport } from "./llm/service.js";
+import type { PlanningDriver } from "./planning.js";
+import type { ReviewDriver } from "./reviews/source.js";
+import { Service } from "./service.js";
+import type { Store } from "./storage/store.js";
+import type { SchoolDriver } from "./zdbk/read.js";
 
-/**
- * Fastify 应用装配（负责人；docs/08 §4）。
- *
- * 铁律（在此文件层面强制）：
- * - 本服务没有任何 zdbk 端点、zdbk 出站请求或 zdbk 凭据处理（D31；
- *   scripts/verify-no-zdbk-write.ts + E2E 网络断言双重验证）；
- * - Fastify v5 插件统一 async 风格，不混用 done 回调（docs/07 §4.4）。
- */
-
-export interface BuildAppOptions {
-  /** 测试注入：贯穿到 chalaoshi service，避免真实 DNS/网络 */
-  chalaoshiFetchImpl?: FetchLike;
-  chalaoshiService?: ChalaoshiService;
-  chalaoshiTimeoutMs?: number;
-  chalaoshiMinIntervalMs?: number;
-  /** 测试注入 L2（memory）；生产由 DATABASE_URL 建 Pool */
-  chalaoshiL2?: L2Store | null;
-  /** 测试可注入已有 Pool；否则有 DATABASE_URL 时自动创建 */
-  pgPool?: Pool;
+const DEFAULT_MAX_BODY = 256 * 1024;
+const IMPORT_MAX_BODY = 64 * 1024 * 1024;
+async function readJson(request: Request, maxBody: number) {
+  if (
+    !/^application\/json(?:;|$)/i.test(
+      request.headers.get("content-type") ?? "",
+    )
+  )
+    throw new ServiceError("INVALID_REQUEST", "请求必须使用 JSON。");
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (length > maxBody)
+    throw new ServiceError("PAYLOAD_TOO_LARGE", "请求体过大。");
+  const reader = request.body?.getReader();
+  if (!reader) throw new ServiceError("INVALID_REQUEST", "缺少请求体。");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBody) {
+        await reader.cancel();
+        throw new ServiceError("PAYLOAD_TOO_LARGE", "请求体过大。");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new ServiceError("INVALID_REQUEST", "JSON 无效。");
+  }
 }
-
-export async function buildApp(
-  config: ServerConfig,
-  options: BuildAppOptions = {},
-): Promise<FastifyInstance> {
-  // 结构化日志由 diagnostics/logger.ts 负责（log.v1），不用 Fastify 内建 pino 输出。
-  const app = Fastify({ logger: false });
-
-  await app.register(helmet, {
-    // CSP 需要结合 Vite 产物显式配置（docs/07 §2.3 说明），Task 6 收口。
-    contentSecurityPolicy: false,
+export function createApp(options: {
+  store: Store;
+  origin: string;
+  driver?: PlanningDriver;
+  transport?: Transport;
+  schoolDriver?: SchoolDriver;
+  reviewDriver?: ReviewDriver;
+}) {
+  const url = new URL(options.origin);
+  if (
+    url.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]"].includes(url.hostname) ||
+    url.origin !== options.origin
+  )
+    throw new Error("Use a canonical HTTP loopback origin");
+  const token = randomBytes(32).toString("hex");
+  const service = new Service(
+    options.store,
+    token,
+    options.driver,
+    options.transport,
+    options.schoolDriver,
+    options.reviewDriver,
+  );
+  const app = new Hono();
+  const pending = new Map<string, { hash: string; work: Promise<unknown> }>();
+  const meta = () => ({
+    contractVersion: CONTRACT_VERSION,
+    requestId: `request-${randomUUID()}`,
+    servedAt: new Date().toISOString(),
   });
-  await app.register(rateLimit, {
-    max: 120,
-    timeWindow: "1 minute",
+  let windowStart = Date.now();
+  let requests = 0;
+  app.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "no-referrer");
+    c.header(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    );
+    const origin = c.req.header("origin");
+    const fetchSite = c.req.header("sec-fetch-site");
+    if (
+      c.req.header("host") !== url.host ||
+      new URL(c.req.url).host !== url.host ||
+      (origin !== undefined && origin !== url.origin) ||
+      (fetchSite !== undefined && !["same-origin", "none"].includes(fetchSite))
+    )
+      throw new ServiceError("ORIGIN_REJECTED", "请求来源不受信任。");
+    if (c.req.path.startsWith("/api/")) {
+      if (Date.now() - windowStart > 60000) {
+        windowStart = Date.now();
+        requests = 0;
+      }
+      if (++requests > 1200)
+        throw new ServiceError(
+          "RATE_LIMITED",
+          "请求过于频繁，请稍后重试。",
+          true,
+        );
+      if (c.req.path === "/api/bootstrap") {
+        if (origin !== url.origin && fetchSite !== "same-origin")
+          throw new ServiceError("ORIGIN_REJECTED", "Bootstrap 需要同源请求。");
+      } else if (c.req.header("x-local-token") !== token)
+        throw new ServiceError(
+          "LOCAL_AUTH_REQUIRED",
+          "本机会话已变化，请刷新页面。",
+        );
+    }
+    await next();
   });
-
-  app.get("/api/health", async () => ({ status: "ok" as const }));
-
-  // L2：有 DATABASE_URL 时建 Pool；无则 chalaoshi 仅 L1+seed（开发/CI 常态）
-  const ownedPool =
-    options.pgPool === undefined && options.chalaoshiL2 === undefined && config.DATABASE_URL
-      ? new Pool({ connectionString: config.DATABASE_URL })
-      : null;
-  const pgPool = options.pgPool ?? ownedPool ?? undefined;
-
-  if (ownedPool) {
-    app.addHook("onClose", async () => {
-      await ownedPool.end();
+  app.onError((error, c) => {
+    const known =
+      error instanceof ServiceError
+        ? error
+        : new ServiceError(
+            "INTERNAL_ERROR",
+            "本机操作失败；未暴露内部错误内容，请重试。",
+          );
+    return c.json(
+      Failure.parse({
+        meta: meta(),
+        error: {
+          code: known.code,
+          message: known.message,
+          retryable: known.retryable,
+          fields: [],
+        },
+      }),
+      errorStatus[known.code] as ContentfulStatusCode,
+    );
+  });
+  for (const [operation, route] of Object.entries(api)) {
+    const path = route.path.replace(/\{([^}]+)\}/g, ":$1");
+    app.on(route.method, path, async (c) => {
+      let params: Record<string, string>;
+      let query: Record<string, string>;
+      let body: unknown = null;
+      try {
+        params = route.params.parse(c.req.param()) as Record<string, string>;
+        const search = new URL(c.req.url).searchParams;
+        if (
+          [...new Set(search.keys())].some(
+            (key) => search.getAll(key).length !== 1,
+          )
+        )
+          throw new Error("Duplicate query");
+        query = route.query.parse(Object.fromEntries(search)) as Record<
+          string,
+          string
+        >;
+        if (route.body !== null) {
+          const raw = await readJson(
+            c.req.raw,
+            operation === "previewImport" ? IMPORT_MAX_BODY : DEFAULT_MAX_BODY,
+          );
+          if (operation === "previewImport") {
+            const version = z
+              .object({ archive: z.object({ schemaVersion: z.number() }) })
+              .safeParse(raw);
+            if (
+              version.success &&
+              ![1, 2].includes(version.data.archive.schemaVersion)
+            )
+              throw new ServiceError(
+                "UNSUPPORTED_SCHEMA_VERSION",
+                "归档版本不受支持；本地数据未改变。",
+              );
+          }
+          body = route.body.parse(raw);
+        }
+      } catch (error) {
+        if (error instanceof ServiceError) throw error;
+        throw new ServiceError(
+          "INVALID_REQUEST",
+          "请求字段、版本或引用格式无效。",
+        );
+      }
+      let key: string | undefined;
+      let hash = "";
+      if (route.idempotencyKey) {
+        const parsed = Id.safeParse(c.req.header("idempotency-key"));
+        if (!parsed.success)
+          throw new ServiceError("INVALID_REQUEST", "缺少有效幂等键。");
+        key = parsed.data;
+        hash = createHash("sha256")
+          .update(JSON.stringify({ operation, params, query, body }))
+          .digest("hex");
+      }
+      const resolve = () => {
+        if (key) {
+          const existing = options.store.cached(key, hash);
+          if (existing !== null) return existing;
+        }
+        const result = service.execute(
+          operation as OperationId,
+          params,
+          query,
+          body,
+        );
+        if (result instanceof Promise)
+          throw new Error("Async work cannot enter a SQLite transaction");
+        const data = route.response.parse(result);
+        if (key) options.store.cache(key, hash, data);
+        return data;
+      };
+      let data: unknown;
+      if (
+        [
+          "interpretPreferences",
+          "explainProjection",
+          "summarizeComments",
+          "lookupReviewMatch",
+          "fetchReview",
+          "logout",
+          "applyClear",
+        ].includes(operation)
+      ) {
+        const cached = key ? options.store.cached(key, hash) : null;
+        if (cached !== null) data = cached;
+        else {
+          const active = key ? pending.get(key) : undefined;
+          if (active && active.hash !== hash)
+            throw new ServiceError(
+              "IDEMPOTENCY_CONFLICT",
+              "同一幂等键对应不同请求。",
+            );
+          if (active) data = await active.work;
+          else {
+            const work = (async () => {
+              const result = await service.execute(
+                operation as OperationId,
+                params,
+                query,
+                body,
+              );
+              return options.store.transaction(() => {
+                const value = route.response.parse(result);
+                if (key) options.store.cache(key, hash, value);
+                return value;
+              });
+            })();
+            if (key) pending.set(key, { hash, work });
+            try {
+              data = await work;
+            } finally {
+              if (key) pending.delete(key);
+            }
+          }
+        }
+      } else data = options.store.transaction(resolve);
+      return c.json(
+        success(z.unknown()).parse({ meta: meta(), data }),
+        route.successStatus,
+      );
     });
   }
-
-  const chalaoshiOpts: BuildChalaoshiRoutesOptions = {
-    config,
-    fetchImpl: options.chalaoshiFetchImpl,
-    service: options.chalaoshiService,
-    timeoutMs: options.chalaoshiTimeoutMs,
-    minIntervalMs: options.chalaoshiMinIntervalMs,
-    pgPool,
-    l2: options.chalaoshiL2,
+  app.all("/api/*", () => {
+    throw new ServiceError("NOT_FOUND", "接口不存在。");
+  });
+  return {
+    app,
+    service,
+    close: async () => {
+      service.planning.close();
+      service.models.clear();
+      service.reviews.clear();
+      await service.school?.close();
+    },
   };
-
-  await app.register(importRoutes, { prefix: "/api/import" });
-  await app.register(buildChalaoshiRoutes(chalaoshiOpts), { prefix: "/api/chalaoshi" });
-  await app.register(llmGatewayRoutes, { prefix: "/api/llm" });
-  await app.register(plannerRoutes, { prefix: "/api/planner" });
-  await app.register(diagnosticsRoutes, { prefix: "/api/diagnostics" });
-
-  if (config.NODE_ENV === "production") {
-    // 生产环境同源托管 Vite 产物 dist/client（docs/07 §1）。
-    // 本文件构建后位于 dist/server/app.js，故产物目录是 ../client。
-    const { default: fastifyStatic } = await import("@fastify/static");
-    const { fileURLToPath } = await import("node:url");
-    await app.register(fastifyStatic, {
-      root: fileURLToPath(new URL("../client", import.meta.url)),
-      prefix: "/",
-    });
-  }
-
-  return app;
 }

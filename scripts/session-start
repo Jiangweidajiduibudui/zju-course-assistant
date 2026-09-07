@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root=$(git rev-parse --show-toplevel)
+if [[ ! -d "$repo_root/node_modules" ]]; then
+  echo 'ZJU workspace: development packages are absent. Follow MAINTAINING.md; use scripts/in-env for conda commands.'
+elif [[ "${CONDA_DEFAULT_ENV:-}" != zju-course-assistant ]]; then
+  echo 'ZJU workspace: this shell is not in the project conda environment. Use scripts/in-env for development commands.'
+fi

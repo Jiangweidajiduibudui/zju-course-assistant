@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.server.json",
+  "include": [
+    "src/server/**/*.ts",
+    "src/domain/**/*.ts",
+    "src/shared/contracts/**/*.ts",
+    "scripts/start-server.ts",
+    "scripts/start-demo.ts",
+    "fixtures/ui/catalog.ts"
+  ],
+  "exclude": ["tests"],
+  "compilerOptions": {
+    "noEmit": false
+  }
+}

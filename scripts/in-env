@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -eq 0 ]]; then
+  echo 'Usage: scripts/in-env <command> [arguments...]' >&2
+  exit 2
+fi
+if command -v conda >/dev/null 2>&1; then
+  conda_bin=$(command -v conda)
+elif [[ -x "$HOME/miniconda3/bin/conda" ]]; then
+  conda_bin="$HOME/miniconda3/bin/conda"
+else
+  echo 'Conda is required. See MAINTAINING.md.' >&2
+  exit 1
+fi
+exec "$conda_bin" run --no-capture-output -n zju-course-assistant "$@"

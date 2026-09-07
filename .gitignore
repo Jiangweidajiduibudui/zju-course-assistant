@@ -1,81 +1,32 @@
-# Dependencies and package-manager state
 node_modules/
-.pnpm-store/
-
-# Build and TypeScript output
 dist/
-build/
-.vite/
-*.tsbuildinfo
-
-# Tests and browser automation
 coverage/
-.nyc_output/
 playwright-report/
 test-results/
-blob-report/
-
-# Logs and process files
-logs/
-*.log
-*.pid
-*.pid.lock
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Environment files and secrets
 .env
 .env.*
 !.env.example
-*.local
-
-# Local caches, scratch files, and databases
-artifacts/
-.cache/
-.tmp/
-tmp/
-temp/
-*.db
-*.db-shm
-*.db-wal
+.local/
+.data/
 *.sqlite
+*.sqlite-*
 *.sqlite3
-*.dump
-.docker-data/
-postgres-data/
-
-# IDE and editor state
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Local AI-agent configuration and runtime state
-.agents/
+*.sqlite3-*
+*.sqlite3.*.bak
+*.db
+*.db-*
+*.log
 .claude/
-.codex/
-.gemini/
-.kiro/
-.omx/
-.qoder/
-.code-review-graph/
-.cursorrules
-.windsurfrules
-.mcp.json
-.opencode.json
-AGENTS.md
-CLAUDE.md
-.github/code-review-graph.instruction.md
-
-# Local development-mode notes and resumable progress ledger
-IMPLEMENT_MODE.md
-PROGRESS.md
-
-# Operating-system metadata
+/backup/
 .DS_Store
-._*
+
+# Local design/research and agent progress are not release source.
+/docs/*
+!/docs/api/
+/runtime/
+/releases/
+*.zip
+*.tar.gz
+*.har
+*.trace
 Thumbs.db
-Desktop.ini

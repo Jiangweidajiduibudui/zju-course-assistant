@@ -1,0 +1,6 @@
+# Project-only integration. Inherit model, permissions, and global plugins.
+[mcp_servers.zju_ui]
+command = "bash"
+args = ["-c", 'exec "$(git rev-parse --show-toplevel)/scripts/playwright-mcp"']
+startup_timeout_sec = 30
+tool_timeout_sec = 60

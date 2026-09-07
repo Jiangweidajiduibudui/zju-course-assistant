@@ -1,0 +1,17 @@
+{
+  "description": "Report the project toolchain entrypoint without mutating shell state.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/session-start\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
