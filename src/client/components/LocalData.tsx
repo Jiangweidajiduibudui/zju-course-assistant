@@ -26,7 +26,7 @@ export function LocalData() {
   };
   return (
     <details className="local-data">
-      <summary>本机数据与备份</summary>
+      <summary data-tour="local-data">本机数据与备份</summary>
       <p className="muted">
         保存于 {info.dataDirectory}。导入先预览，确认后添加为新计划。
       </p>

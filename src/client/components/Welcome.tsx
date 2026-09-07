@@ -1,17 +1,60 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Onboarding } from "./Onboarding.js";
 import { Button, Modal } from "./ui.js";
 
 const NOTICE_KEY = "zju-course-assistant:welcome:v2";
-
-export function Welcome() {
-  const [open, setOpen] = useState(() => {
+export function Welcome({
+  hasSnapshot,
+  hasPlan,
+}: {
+  hasSnapshot: boolean;
+  hasPlan: boolean;
+}) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [view, setView] = useState<"notice" | "guide" | null>(() => {
     try {
-      return localStorage.getItem(NOTICE_KEY) !== "acknowledged";
+      return localStorage.getItem(NOTICE_KEY) === "acknowledged"
+        ? null
+        : "notice";
     } catch {
-      return true;
+      return "notice";
     }
   });
-  if (!open) return null;
+  const finish = () => {
+    try {
+      localStorage.setItem(NOTICE_KEY, "acknowledged");
+    } catch {
+      // Storage restrictions must not prevent using the workbench.
+    }
+    setView(null);
+    trigger.current?.focus({ preventScroll: true });
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="button"
+        data-tour="replay"
+        ref={trigger}
+        onClick={() => setView("guide")}
+      >
+        新手指引
+      </button>
+      {view === "notice" && (
+        <FirstUseNotice onContinue={() => setView("guide")} />
+      )}
+      {view === "guide" && (
+        <Onboarding
+          hasSnapshot={hasSnapshot}
+          hasPlan={hasPlan}
+          close={finish}
+        />
+      )}
+    </>
+  );
+}
+
+function FirstUseNotice({ onContinue }: { onContinue: () => void }) {
   return (
     <Modal title="欢迎使用选课工作台" close={() => {}} dismissible={false}>
       <div className="welcome-content">
@@ -40,17 +83,7 @@ export function Welcome() {
         <p className="muted">
           课表汇总学期内的教学安排，备选不计为同时上课。未提供的数据以「—」表示；标有「合成数据」的内容用于演示。
         </p>
-        <Button
-          className="primary-button"
-          onClick={() => {
-            try {
-              localStorage.setItem(NOTICE_KEY, "acknowledged");
-            } catch {
-              // Browsers that block storage still allow this visit to continue.
-            }
-            setOpen(false);
-          }}
-        >
+        <Button className="primary-button" onClick={onContinue}>
           了解，开始规划
         </Button>
       </div>

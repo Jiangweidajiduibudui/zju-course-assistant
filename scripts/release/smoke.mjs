@@ -123,6 +123,21 @@ try {
   await page
     .getByRole("button", { name: "了解，开始规划", exact: true })
     .click();
+  const guide = page.getByRole("region", { name: "新手指引", exact: true });
+  await guide.waitFor();
+  assert.equal(
+    await guide
+      .getByRole("button", { name: "下一步", exact: true })
+      .isDisabled(),
+    true,
+  );
+  assert.equal(
+    await page
+      .locator("[data-tour-highlight]")
+      .getAttribute("data-tour-highlight"),
+    '[data-tour="school"]',
+  );
+  await guide.getByRole("button", { name: "稍后再看", exact: true }).click();
   await page
     .getByRole("heading", { name: "还没有计划", exact: true })
     .waitFor();
@@ -145,6 +160,7 @@ try {
     reviewsDisabled: true,
     headedChromium: true,
     uiRendered: true,
+    anchoredOnboarding: true,
     noExternalRequests: true,
     condaNotRequired: true,
     manifestSha256: createHash("sha256")

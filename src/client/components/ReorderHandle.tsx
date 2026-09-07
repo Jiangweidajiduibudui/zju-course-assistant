@@ -44,6 +44,7 @@ export function ReorderHandle({
   return (
     <div className="reorder">
       <Button
+        data-tour="reorder"
         className={`drag-handle ${preview ? "dragging" : ""}`}
         aria-label={`拖动排序：${label}`}
         aria-describedby="sort-help"

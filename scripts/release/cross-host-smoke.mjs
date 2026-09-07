@@ -33,6 +33,7 @@ try {
   await page
     .getByRole("button", { name: "了解，开始规划", exact: true })
     .click();
+  await page.getByRole("button", { name: "稍后再看", exact: true }).click();
   await page
     .getByRole("heading", { name: "还没有计划", exact: true })
     .waitFor();

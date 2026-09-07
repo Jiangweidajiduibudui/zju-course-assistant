@@ -1421,3 +1421,66 @@ dialog::backdrop {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.welcome-content {
+  font-size: 14px;
+}
+.tour-spotlight {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  border: 2px solid var(--theme);
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px #14141355;
+}
+.tour-card {
+  position: fixed;
+  z-index: 1001;
+  width: min(330px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.6;
+  box-shadow: 0 12px 40px #14141330;
+}
+.tour-card h3 {
+  margin: 6px 0 10px;
+  color: var(--ink);
+  font-size: 18px;
+}
+.tour-count {
+  color: var(--theme);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.tour-hint {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+}
+.tour-actions > div {
+  display: flex;
+  gap: 6px;
+}
+.tour-card::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--theme);
+  border-radius: 50%;
+  top: 18px;
+  right: 18px;
+}

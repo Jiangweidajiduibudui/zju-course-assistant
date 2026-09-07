@@ -80,7 +80,9 @@ export function SchoolConnection() {
           : "连接教务";
   return (
     <>
-      <Button onClick={() => setOpen(true)}>{label}</Button>
+      <Button data-tour="school" onClick={() => setOpen(true)}>
+        {label}
+      </Button>
       {open && (
         <Modal title="教务连接与同步" close={() => setOpen(false)}>
           <p>在学校窗口完成登录后，同步当前学期课程。</p>

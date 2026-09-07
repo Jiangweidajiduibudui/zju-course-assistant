@@ -111,7 +111,7 @@ export function CourseCard({
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary>
+      <summary data-tour="course-details">
         <div>
           <div className="course-kicker">
             {course.code}{" "}
@@ -217,6 +217,7 @@ export function CourseCard({
               </div>
               <div className="section-actions">
                 <Button
+                  data-tour="add-candidate"
                   className={
                     item?.disposition === "candidate"
                       ? "chosen"

@@ -95,6 +95,7 @@ export function App() {
         <div className="sidebar-heading">
           <span>我的计划</span>
           <Button
+            data-tour="new-plan"
             aria-label="新建计划"
             disabled={action.isPending || !info.initialSnapshotId}
             onClick={() => {
@@ -156,6 +157,10 @@ export function App() {
         <header className="topbar">
           <SchoolConnection />
           <ModelSettings />
+          <Welcome
+            hasSnapshot={!!info.initialSnapshotId}
+            hasPlan={!!selectedId}
+          />
           <span className="topbar-term">{info.termLabel}</span>
           {info.synthetic && <span className="demo-pill">合成数据</span>}
         </header>
@@ -226,7 +231,6 @@ export function App() {
           )}
         </main>
       </div>
-      <Welcome />
       {dialog === "new" && (
         <Modal title="新建计划" close={() => setDialog(null)}>
           <form
@@ -496,6 +500,7 @@ function PlanWorkspace({
             {tabs.map((tab) => (
               <Button
                 key={tab.id}
+                data-tour={`tab-${tab.id}`}
                 aria-current={ui.tab === tab.id ? "step" : undefined}
                 className={ui.tab === tab.id ? "active-tab" : ""}
                 onClick={() => ui.set({ tab: tab.id })}
@@ -511,6 +516,7 @@ function PlanWorkspace({
                 <label className="search-box">
                   <span aria-hidden="true">⌕</span>
                   <input
+                    data-tour="search"
                     aria-label="搜索课程、代码或教师"
                     placeholder="搜索名称、课号或教师…"
                     value={ui.query}
@@ -861,7 +867,7 @@ function Shortlist({
     });
   return (
     <div className="shortlist">
-      <div className="shortlist-intro">
+      <div className="shortlist-intro" data-tour="candidate-order">
         <h3>排列你的偏好</h3>
         <p id="sort-help">
           拖动手柄或使用方向键排序，排在最前的教学班成为首选。
@@ -1171,6 +1177,7 @@ function DraftView({
           返回候选清单调整
         </Button>
         <Button
+          data-tour="export-draft"
           disabled={!canExport || exporting}
           title={
             canExport

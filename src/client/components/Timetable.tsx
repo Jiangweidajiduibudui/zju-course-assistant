@@ -32,7 +32,7 @@ export function Timetable({
   const credit = projection.credits;
   return (
     <aside className="panel timetable-panel" aria-label="课表投影">
-      <div className="panel-title">
+      <div className="panel-title" data-tour="timetable">
         <div>
           <span className="eyebrow">PROJECTION</span>
           <h2>课表投影</h2>

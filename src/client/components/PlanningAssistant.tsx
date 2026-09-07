@@ -196,6 +196,7 @@ export function PlanningAssistant({
     <section className="planning-assistant" aria-label="AI 排课助手">
       <div className="toolbar-actions">
         <Button
+          data-tour="preferences"
           disabled={busy || working}
           onClick={() => {
             editRevision.current = plan.revision;
