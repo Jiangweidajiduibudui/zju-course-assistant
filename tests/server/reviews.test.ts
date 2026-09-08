@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { originalSnapshot } from "../../fixtures/ui/catalog.js";
+import { initialPlans, originalSnapshot } from "../../fixtures/ui/catalog.js";
 import { createApp } from "../../src/server/app.js";
 import { ServiceError } from "../../src/server/errors.js";
 import type { Transport } from "../../src/server/llm/service.js";
+import { PlanningService } from "../../src/server/planning.js";
 import {
   anonymousReviewText,
   prepareSummary,
@@ -18,6 +19,7 @@ import { reviewUrl } from "../../src/server/reviews/transport.js";
 import { Service } from "../../src/server/service.js";
 import { Store } from "../../src/server/storage/store.js";
 import { api, type OperationId } from "../../src/shared/contracts/api.js";
+import { PlanningJob } from "../../src/shared/contracts/llm.js";
 import {
   ExternalTeacher,
   Review,
@@ -541,4 +543,130 @@ it("serves review routes and coalesces identical HTTP summary requests", async (
   expect(replies.every((r) => r.status === 200)).toBe(true);
   expect(replies[0]?.data).toEqual(replies[1]?.data);
   expect(transport).toHaveBeenCalledTimes(1);
+});
+
+it("planning evidence uses current matched candidate reviews and excludes stale or disabled sources", async () => {
+  const { service, store, load } = setup();
+  const { review, match } = await load();
+  expect(
+    service.reviews.planningEvidence(originalSnapshot, ["math-a"])[0]
+      ?.teacherRating,
+  ).toMatchObject({ state: "unknown", displayText: "4.6 · 9人" });
+  review.teacherRating = {
+    state: "known",
+    value: {
+      value: 4,
+      minimum: 0,
+      maximum: 5,
+      sampleSize: { state: "known", value: 9 },
+    },
+  };
+  const grade = review.courseGrades[0];
+  if (!grade) throw new Error("Missing synthetic grade");
+  grade.average = review.teacherRating;
+  store.put("review", review.id, review);
+  const evidence = () =>
+    service.reviews.planningEvidence(originalSnapshot, ["math-a"]);
+  expect(evidence()).toHaveLength(1);
+  expect(evidence()[0]?.courseGrade.state).toBe("known");
+  expect(evidence()[0]?.summary).toBeNull();
+  expect(
+    service.reviews.planningEvidence(originalSnapshot, ["math-b"]),
+  ).toEqual([]);
+  store.put("review", review.id, {
+    ...review,
+    courseGradeMatch: { status: "unmatched", reason: "synthetic ambiguity" },
+  });
+  expect(evidence()[0]?.courseGrade.state).toBe("unknown");
+  store.put("review", review.id, {
+    ...review,
+    fetchedAt: "2020-01-01T00:00:00Z",
+  });
+  expect(evidence()).toEqual([]);
+  store.put("review", review.id, review);
+  store.put("teacher-match", match.id, {
+    ...match,
+    revision: match.revision + 1,
+  });
+  expect(evidence()).toEqual([]);
+  store.put("teacher-match", match.id, match);
+  const settings = service.models.settings();
+  service.models.update({
+    expectedRevision: settings.revision,
+    content: { ...settings.content, reviewsEnabled: false, endpoints: [] },
+  });
+  expect(evidence()).toEqual([]);
+});
+
+it("planning sends existing summaries only when review preference is selected", async () => {
+  const { service, store, load, endpoint } = setup(
+    driver(),
+    vi.fn(async () => response(summaryOutput)),
+  );
+  const { review } = await load();
+  await service.execute(
+    "summarizeComments",
+    {},
+    {},
+    {
+      reviewId: review.id,
+      expectedReviewRevision: review.revision,
+      endpointId: endpoint.id,
+    },
+  );
+  expect(
+    service.reviews.planningEvidence(originalSnapshot, ["math-a"])[0]?.summary,
+  ).toEqual(summaryOutput);
+  const plan = structuredClone(initialPlans[0]);
+  if (!plan) throw new Error("Missing plan");
+  plan.content.preferences.orderedCriteria = ["review_evidence"];
+  store.insertPlan(plan);
+  const generate = vi.fn<
+    import("../../src/server/planning.js").PlanningDriver["generate"]
+  >(async () => ({}));
+  const planning = new PlanningService(
+    store,
+    { synthetic: true, generate },
+    service.models,
+    service.reviews,
+  );
+  callbacks.push(() => planning.close());
+  planning.start({
+    plan: { planId: plan.id, expectedRevision: plan.revision },
+    endpointId: endpoint.id,
+  });
+  await vi.waitFor(() => expect(generate).toHaveBeenCalled());
+  expect(generate.mock.calls[0]?.[0]).toMatchObject({
+    reviewEvidence: [
+      expect.objectContaining({ sectionId: "math-a", summary: summaryOutput }),
+    ],
+  });
+  await vi.waitFor(() =>
+    expect(
+      store.resources("job", PlanningJob).every((j) => j.status === "failed"),
+    ).toBe(true),
+  );
+  const without = structuredClone(plan);
+  without.id = "plan-without-reviews";
+  without.content.preferences.orderedCriteria = [];
+  store.insertPlan(without);
+  generate.mockClear();
+  planning.start({
+    plan: { planId: without.id, expectedRevision: 1 },
+    endpointId: endpoint.id,
+  });
+  await vi.waitFor(() => expect(generate).toHaveBeenCalled());
+  expect(generate.mock.calls[0]?.[0].reviewEvidence).toEqual([]);
+  await vi.waitFor(() =>
+    expect(
+      store.resources("job", PlanningJob).every((j) => j.status === "failed"),
+    ).toBe(true),
+  );
+  store.put("review", review.id, { ...review, cacheState: "stale" });
+  expect(() =>
+    planning.start({
+      plan: { planId: plan.id, expectedRevision: 1 },
+      endpointId: endpoint.id,
+    }),
+  ).toThrow(/没有可用的可靠评价/);
 });

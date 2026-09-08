@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   type APIRequestContext,
   type BrowserContext,
@@ -135,10 +136,16 @@ export class SchoolSession {
         else await route.abort();
       });
       const page = this.browser.pages()[0] ?? (await this.browser.newPage());
-      await page.goto(SELECTION_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-      });
+      await page
+        .goto(SELECTION_URL, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        })
+        .catch(() => {
+          if (signal.aborted || page.isClosed())
+            fail("SESSION_REQUIRED", "登录已取消或窗口已关闭。");
+          // Keep the headed window available for manual reload after a route change.
+        });
       await page.bringToFront();
       const deadline = Date.now() + 300000;
       while (!signal.aborted && Date.now() < deadline) {
@@ -149,10 +156,15 @@ export class SchoolSession {
           url.origin === SCHOOL_ORIGIN &&
           url.pathname.split(";")[0] === "/jwglxt/xtgl/index_initMenu.html"
         )
-          await page.goto(SELECTION_URL, {
-            waitUntil: "domcontentloaded",
-            timeout: 30000,
-          });
+          await page
+            .goto(SELECTION_URL, {
+              waitUntil: "domcontentloaded",
+              timeout: 60000,
+            })
+            .catch(() => {
+              if (signal.aborted || page.isClosed())
+                fail("SESSION_REQUIRED", "登录已取消或窗口已关闭。");
+            });
         if (new URL(page.url()).pathname === READ_PATHS.index) {
           const html = await page.content();
           try {
@@ -194,6 +206,30 @@ export class SchoolSession {
     form: Record<string, string>,
     signal: AbortSignal,
   ): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.readOnce(name, form, signal);
+      } catch (error) {
+        if (
+          signal.aborted ||
+          attempt >= 2 ||
+          !(error instanceof ServiceError) ||
+          error.code !== "UPSTREAM_UNAVAILABLE"
+        )
+          throw error;
+        try {
+          await delay(500 * 2 ** attempt, undefined, { signal });
+        } catch {
+          return fail("SYNC_INCOMPLETE", "同步已取消。");
+        }
+      }
+    }
+  }
+  private async readOnce(
+    name: keyof typeof READ_PATHS,
+    form: Record<string, string>,
+    signal: AbortSignal,
+  ): Promise<string> {
     const method = name === "index" ? "GET" : "POST";
     const url = new URL(READ_PATHS[name], SCHOOL_ORIGIN);
     url.searchParams.set("gnmkdm", "N253530");
@@ -210,7 +246,7 @@ export class SchoolSession {
           "X-Requested-With": "XMLHttpRequest",
           Referer: SELECTION_URL,
         },
-        timeout: 20000,
+        timeout: 30000,
         ignoreHTTPSErrors: false,
       });
     const client = this.client;
@@ -224,37 +260,45 @@ export class SchoolSession {
         method,
         ...(method === "POST" ? { form } : {}),
         maxRedirects: 0,
-        timeout: 20000,
+        timeout: 30000,
       });
-      if ([301, 302, 303, 307, 308, 401, 403].includes(response.status())) {
-        this.state = "expired";
-        return fail("SESSION_EXPIRED", "教务会话已失效，请重新登录。");
-      }
-      if (!response.ok())
-        return fail("UPSTREAM_UNAVAILABLE", "教务读取失败；旧快照保持不变。");
-      const buffer = await response.body();
-      await response.dispose();
-      if (buffer.length > 32 * 1024 * 1024)
-        return fail("SYNC_INCOMPLETE", "教务单次响应超出大小限制。");
-      const text = buffer.toString("utf8");
-      if (name !== "index" && !/^[\s]*[[{]/.test(text)) {
-        if (/login_slogin|cas\/login|用户登录/.test(text)) {
+      try {
+        if ([301, 302, 303, 307, 308, 401, 403].includes(response.status())) {
           this.state = "expired";
-          return fail("SESSION_EXPIRED", "教务返回了登录页，请重新登录。");
+          return fail("SESSION_EXPIRED", "教务会话已失效，请重新登录。");
         }
-        return fail(
-          "UPSTREAM_SCHEMA_CHANGED",
-          "教务返回了非数据错误响应，旧快照保持不变。",
-        );
+        if (!response.ok())
+          return fail(
+            [408, 429, 500, 502, 503, 504].includes(response.status())
+              ? "UPSTREAM_UNAVAILABLE"
+              : "SYNC_INCOMPLETE",
+            "教务读取失败；旧快照保持不变。",
+          );
+        const buffer = await response.body();
+        if (buffer.length > 32 * 1024 * 1024)
+          return fail("SYNC_INCOMPLETE", "教务单次响应超出大小限制。");
+        const text = buffer.toString("utf8");
+        if (name !== "index" && !/^[\s]*[[{]/.test(text)) {
+          if (/login_slogin|cas\/login|用户登录/.test(text)) {
+            this.state = "expired";
+            return fail("SESSION_EXPIRED", "教务返回了登录页，请重新登录。");
+          }
+          return fail(
+            "UPSTREAM_SCHEMA_CHANGED",
+            "教务返回了非数据错误响应，旧快照保持不变。",
+          );
+        }
+        if (signal.aborted) return fail("SESSION_REQUIRED", "读取已取消。");
+        this.save(await client.storageState());
+        return text;
+      } finally {
+        await response.dispose().catch(() => {});
       }
-      if (signal.aborted) return fail("SESSION_REQUIRED", "读取已取消。");
-      this.save(await client.storageState());
-      return text;
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       return fail(
         "UPSTREAM_UNAVAILABLE",
-        "教务读取中断、超时或已取消；未发布部分快照。",
+        "教务读取中断或超时；已按读取策略重试，旧快照保持不变。请确认学校页面可访问，网络或 VPN 切换后重新登录并同步。",
       );
     } finally {
       signal.removeEventListener("abort", abort);

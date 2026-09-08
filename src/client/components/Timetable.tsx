@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { calendarOverlap } from "../../domain/planning.js";
 import type { Analysis, SnapshotView } from "../data/port.js";
 import { useUi } from "../ui-store.js";
+import { layoutEntries, weekLabel } from "./timetable-layout.js";
 import { Button, Empty } from "./ui.js";
 
 const periods = Array.from({ length: 13 }, (_, index) => index + 1);
@@ -19,16 +21,50 @@ export function Timetable({
     ? ui.partId
     : snapshot.term.parts[0]?.id;
   const [showReasons, setShowReasons] = useState(false);
+  const [week, setWeek] = useState("all");
   const { projection } = analysis;
   const entries = projection.entries.filter(
     (entry) =>
       entry.slot.partId === partId &&
+      (week === "all" || entry.slot.weeks.includes(Number(week))) &&
       (ui.alternatives || entry.role !== "alternative"),
   );
-  const overlapIssues = projection.validation.issues.filter(
-    (issue) =>
-      issue.code === "TEACHING_OVERLAP" && issue.slot?.partId === partId,
-  );
+  const layout = layoutEntries(entries);
+  const conflicts = (entry: (typeof entries)[number]) =>
+    projection.entries.filter(
+      (other) =>
+        entry.role !== "alternative" &&
+        other.role !== "alternative" &&
+        entry.courseId !== other.courseId &&
+        calendarOverlap(
+          snapshot,
+          week === "all"
+            ? entry.slot
+            : { ...entry.slot, weeks: [Number(week)] },
+          other.slot,
+        ) === true &&
+        (week === "all" ||
+          other.slot.partId !== partId ||
+          other.slot.weeks.includes(Number(week))),
+    );
+  const overlapIssues = [
+    ...new Map(
+      entries.flatMap((entry) =>
+        conflicts(entry).map((other) => {
+          const id = [entryKey(entry), entryKey(other)].sort().join("|");
+          const title = (courseId: string) =>
+            snapshot.courses.find((c) => c.id === courseId)?.title ?? courseId;
+          return [
+            id,
+            {
+              id,
+              message: `${title(entry.courseId)} 与 ${title(other.courseId)}：周${days[entry.slot.weekday - 1]}第 ${Math.max(entry.slot.startPeriod, other.slot.startPeriod)}–${Math.min(entry.slot.endPeriod, other.slot.endPeriod)} 节重叠；${week === "all" ? `本项安排 ${weekLabel(entry.slot.weeks)}` : `第 ${week} 周`}。`,
+            },
+          ] as const;
+        }),
+      ),
+    ).values(),
+  ];
   const credit = projection.credits;
   return (
     <aside className="panel timetable-panel" aria-label="课表投影">
@@ -45,13 +81,39 @@ export function Timetable({
           <select
             aria-label="学期段"
             value={partId}
-            onChange={(event) => ui.set({ partId: event.target.value })}
+            onChange={(event) => {
+              ui.set({ partId: event.target.value });
+              setWeek("all");
+            }}
           >
             {snapshot.term.parts.map((part) => (
               <option key={part.id} value={part.id}>
                 {part.label}季
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          周次
+          <select
+            aria-label="周次"
+            value={week}
+            onChange={(event) => setWeek(event.target.value)}
+          >
+            <option value="all">全部周次</option>
+            {[
+              ...new Set(
+                projection.entries
+                  .filter((e) => e.slot.partId === partId)
+                  .flatMap((e) => e.slot.weeks),
+              ),
+            ]
+              .sort((a, b) => a - b)
+              .map((w) => (
+                <option key={w} value={w}>
+                  第 {w} 周
+                </option>
+              ))}
           </select>
         </label>
         <label className="checkbox-label">
@@ -111,29 +173,23 @@ export function Timetable({
             const course = snapshot.courses.find(
               (row) => row.id === entry.courseId,
             );
-            const conflict = overlapIssues.some((issue) =>
-              issue.sectionIds.includes(entry.sectionId),
-            );
+            const conflict = conflicts(entry).length > 0;
+            const position = layout.get(entry) ?? { lane: 0, lanes: 1 };
             return (
               <div
                 key={entryKey(entry)}
+                title={`${course?.title} · ${weekLabel(entry.slot.weeks)}${conflict ? " · 时间冲突" : ""}`}
                 className={`calendar-event ${entry.role} ${conflict ? "overlap" : ""}`}
                 style={{
                   gridColumn: entry.slot.weekday + 1,
-                  width: conflict ? "calc(50% - 3px)" : undefined,
-                  justifySelf: conflict
-                    ? overlapIssues
-                        .find((issue) =>
-                          issue.sectionIds.includes(entry.sectionId),
-                        )
-                        ?.sectionIds.indexOf(entry.sectionId) === 0
-                      ? "start"
-                      : "end"
-                    : undefined,
+                  width: `calc(${100 / position.lanes}% - 4px)`,
+                  marginLeft: `calc(${(100 * position.lane) / position.lanes}% + 2px)`,
+                  justifySelf: "start",
                   gridRow: `${entry.slot.startPeriod + 1} / ${entry.slot.endPeriod + 2}`,
                 }}
               >
                 <strong>{course?.title}</strong>
+                <small>{weekLabel(entry.slot.weeks)}</small>
                 <small>
                   {entry.role === "alternative"
                     ? "互斥备选"
@@ -161,7 +217,7 @@ export function Timetable({
                   )?.title
                 }{" "}
                 · 周{days[entry.slot.weekday - 1]} {entry.slot.startPeriod}–
-                {entry.slot.endPeriod} 节 ·{" "}
+                {entry.slot.endPeriod} 节 · {weekLabel(entry.slot.weeks)} ·{" "}
                 {entry.role === "alternative"
                   ? "互斥备选，不计入同时上课"
                   : entry.role === "baseline"

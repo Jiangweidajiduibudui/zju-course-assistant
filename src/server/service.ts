@@ -117,7 +117,12 @@ export class Service {
       () => this.models.settings(),
       reviewDriver,
     );
-    this.planning = new PlanningService(store, driver, this.models);
+    this.planning = new PlanningService(
+      store,
+      driver,
+      this.models,
+      this.reviews,
+    );
   }
   private requireSchool() {
     return (

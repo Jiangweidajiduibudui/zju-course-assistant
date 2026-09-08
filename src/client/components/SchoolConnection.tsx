@@ -29,9 +29,11 @@ export function SchoolConnection() {
       return api.request("getJob", { jobId });
     },
     refetchInterval: (query) =>
-      query.state.data &&
+      !query.state.data ||
       ["queued", "running"].includes(query.state.data.status)
-        ? 1000
+        ? query.state.error
+          ? 3000
+          : 1000
         : false,
   });
   useEffect(() => {

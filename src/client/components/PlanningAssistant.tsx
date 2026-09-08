@@ -402,10 +402,10 @@ export function PlanningAssistant({
               .map((key) => (
                 <Button
                   key={key}
-                  disabled={key === "review_evidence"}
+                  disabled={working}
                   title={
                     key === "review_evidence"
-                      ? "尚未接入可靠评价，暂不进行评价比较"
+                      ? "使用当前候选已加载且有效的评价和已有摘要；缺少证据时会提示，不会自动抓取或生成摘要"
                       : undefined
                   }
                   onClick={() =>

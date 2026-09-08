@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 import { originalSnapshot } from "../../fixtures/ui/catalog.js";
 import { FixtureWorkspace, STORAGE_KEY } from "../../fixtures/ui/workspace.js";
 import { demandRatio } from "../../src/client/components/DemandRatio.js";
+import {
+  layoutEntries,
+  weekLabel,
+} from "../../src/client/components/timetable-layout.js";
 
 test.beforeEach(async ({ context }) => {
   await context.addInitScript(() => {
@@ -120,13 +124,13 @@ test("demand ratio uses all pending and total remaining, with explicit zero and 
   await expect(card.locator(".demand-ratio")).toHaveText("报录比3.00 : 1");
 });
 
-test("term-part projection includes later weeks and has no week selector", async ({
+test("term-part projection includes later weeks and supports week filtering", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(
     page.getByRole("combobox", { name: "周次", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await page
     .getByRole("textbox", { name: "搜索课程、代码或教师" })
     .fill("设计与生活");
@@ -601,4 +605,54 @@ test("unconfirmed hard-rule edits are not activated merely by requesting text in
   );
   expect(stored.plans[0].content.preferences.hardConstraints).toEqual([]);
   expect(stored.plans[0].content.preferences.textConfirmed).toBe(false);
+});
+
+test("timetable displays week ranges, separates overlapping cards and filters weeks", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const events = page.locator(".calendar-event.primary");
+  await expect(events.first()).toContainText("周");
+  const math = events.filter({ hasText: "微积分基础" });
+  const code = events.filter({ hasText: "程序设计实践" });
+  await expect(math).toHaveClass(/overlap/);
+  const a = await math.boundingBox(),
+    b = await code.boundingBox();
+  if (!a || !b) throw new Error("Missing overlapping cards");
+  expect(a.x + a.width).toBeLessThanOrEqual(b.x + 1);
+  await page.getByLabel("周次", { exact: true }).selectOption("1");
+  await expect(math).toBeVisible();
+  await page.getByRole("button", { name: "02 候选清单" }).click();
+  await page.getByRole("button", { name: "我的偏好", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "＋ 参考可靠评价", exact: true }),
+  ).toBeEnabled();
+});
+
+test("odd and even weeks share visual lanes without being reported as simultaneous", () => {
+  const base = {
+    courseId: "synthetic",
+    role: "primary" as const,
+    slot: {
+      partId: "autumn",
+      weekday: 1,
+      startPeriod: 1,
+      endPeriod: 2,
+      weeks: [1, 3, 5, 7],
+    },
+    location: { state: "unknown" as const, reason: "not_provided" as const },
+  };
+  const odd = { ...base, sectionId: "odd" };
+  const even = {
+    ...base,
+    sectionId: "even",
+    slot: { ...base.slot, weeks: [2, 4, 6, 8] },
+  };
+  const third = { ...base, sectionId: "third" };
+  const layout = layoutEntries([odd, even, third]);
+  expect([...layout.values()].map((p) => p.lane)).toEqual([0, 1, 2]);
+  expect([...layout.values()].every((p) => p.lanes === 3)).toBe(true);
+  expect(weekLabel(odd.slot.weeks)).toBe("1–7 周（单周）");
+  expect(weekLabel(even.slot.weeks)).toBe("2–8 周（双周）");
+  expect(weekLabel([1, 4, 7])).toBe("1、4、7 周");
 });

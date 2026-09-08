@@ -22,6 +22,7 @@ import type { PreferenceProfile } from "../shared/contracts/planning.js";
 import { Plan } from "../shared/contracts/planning.js";
 import { fail, ServiceError } from "./errors.js";
 import { EndpointBinding, type ModelService } from "./llm/service.js";
+import type { ReviewService } from "./reviews/service.js";
 import type { Store } from "./storage/store.js";
 
 // The guarded provider and synthetic tests share this narrow orchestration seam.
@@ -45,6 +46,7 @@ export class PlanningService {
     private store: Store,
     private driver?: PlanningDriver,
     private models?: ModelService,
+    private reviews?: ReviewService,
   ) {}
   context(id: string, revision?: number): PlanningContext {
     const plan = this.store.plan(id, revision);
@@ -129,6 +131,22 @@ export class PlanningService {
         : [];
     if (context.snapshot.enrolledSectionIds.state !== "known")
       fail("VALIDATION_FAILED", "锁定基线未知，不能生成完整课表。");
+    const reviewIds = ids.filter((id) => {
+      const courseId = context.snapshot.sections.find(
+        (s) => s.id === id,
+      )?.courseId;
+      const criteria =
+        preferences.courseOverrides.find((o) => o.courseId === courseId)
+          ?.orderedCriteria ?? preferences.orderedCriteria;
+      return criteria.includes("review_evidence");
+    });
+    const reviewEvidence =
+      this.reviews?.planningEvidence(context.snapshot, reviewIds) ?? [];
+    if (reviewIds.length && !reviewEvidence.length)
+      fail(
+        "VALIDATION_FAILED",
+        "当前候选没有可用的可靠评价。请启用外部评价并加载、确认教师评价，或移除“参考可靠评价”偏好后重试。",
+      );
     const parsedPayload = GenerateTimetableInput.safeParse({
       term: context.snapshot.term,
       profile: preferences,
@@ -142,7 +160,7 @@ export class PlanningService {
         (s) => ids.includes(s.id) || baseline.includes(s.id),
       ),
       baselineSectionIds: baseline,
-      reviewEvidence: [],
+      reviewEvidence,
     });
     if (!parsedPayload.success)
       return fail(

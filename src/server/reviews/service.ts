@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { api } from "../../shared/contracts/api.js";
-import type { Teacher } from "../../shared/contracts/catalog.js";
+import type { SnapshotData, Teacher } from "../../shared/contracts/catalog.js";
+import {
+  PlanningReviewEvidence,
+  SummaryRecord,
+} from "../../shared/contracts/llm.js";
 import type { Settings } from "../../shared/contracts/operations.js";
 import {
   Comment,
@@ -48,6 +52,83 @@ export class ReviewService {
     if (!settings.content.reviewsEnabled)
       return fail("EXTERNAL_ACCESS_DISABLED", "请先启用外部评价。");
     return reviewUrl(settings.content.reviewSources[sourceId]).href;
+  }
+  planningEvidence(snapshot: SnapshotData, sectionIds: string[]) {
+    const settings = this.settings().content;
+    if (!settings.reviewsEnabled) return [];
+    const matches = this.store.resources("teacher-match", TeacherMatch);
+    const summaries = this.store.resources("summary", SummaryRecord);
+    return this.store.resources("review", Review).flatMap((review) => {
+      const match = matches.find((m) => m.id === review.matchId);
+      if (
+        !match ||
+        match.revision !== review.matchRevision ||
+        match.snapshotId !== snapshot.meta.id ||
+        match.state.status !== "matched" ||
+        match.sourceBaseUrl !==
+          reviewUrl(settings.reviewSources[match.sourceId]).href ||
+        review.sourceId !== match.sourceId ||
+        review.cacheState !== "fresh" ||
+        Date.now() - Date.parse(review.fetchedAt) >= CACHE_MS ||
+        review.synthetic !== snapshot.meta.provenance.synthetic
+      )
+        return [];
+      const gradeMatch = review.courseGradeMatch;
+      const courseGrade =
+        gradeMatch.status === "matched"
+          ? review.courseGrades.find(
+              (g) => g.id === gradeMatch.externalCourseId,
+            )?.average
+          : undefined;
+      const summary =
+        summaries
+          .filter(
+            (s) =>
+              s.reviewId === review.id &&
+              s.reviewRevision === review.revision &&
+              settings.endpoints.some(
+                (e) =>
+                  e.id === s.endpointId && e.revision === s.endpointRevision,
+              ),
+          )
+          .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0]
+          ?.output ?? null;
+      if (
+        review.teacherRating.state !== "known" &&
+        !(
+          review.teacherRating.state === "unknown" &&
+          review.teacherRating.displayText
+        ) &&
+        courseGrade?.state !== "known" &&
+        !(courseGrade?.state === "unknown" && courseGrade.displayText) &&
+        !summary
+      )
+        return [];
+      return snapshot.sections
+        .filter(
+          (s) =>
+            sectionIds.includes(s.id) &&
+            s.courseId === review.courseId &&
+            s.teachers.state === "known" &&
+            s.teachers.value.some((t) => t.id === match.officialTeacher.id),
+        )
+        .map((section) =>
+          PlanningReviewEvidence.parse({
+            sectionId: section.id,
+            courseId: section.courseId,
+            reviewId: review.id,
+            reviewRevision: review.revision,
+            source: review.source,
+            synthetic: review.synthetic,
+            teacherRating: review.teacherRating,
+            courseGrade: courseGrade ?? {
+              state: "unknown",
+              reason: "not_verified",
+            },
+            summary,
+          }),
+        );
+    });
   }
   private current(sourceId: SourceId, base: string, epoch: number) {
     if (epoch !== this.epoch || this.source(sourceId) !== base)

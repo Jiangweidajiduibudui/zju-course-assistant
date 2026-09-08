@@ -42,15 +42,44 @@ export class HttpWorkspace implements WorkspacePort {
       if (!key) this.pendingKeys.set(fingerprint, requestKey);
     }
     if (route.body) headers["Content-Type"] = "application/json";
-    const response = await fetch(path, {
-      method: route.method,
-      headers,
-      ...(route.body ? { body: JSON.stringify(route.body.parse(body)) } : {}),
-      credentials: "omit",
-      redirect: "error",
-      cache: "no-store",
-    });
-    const payload = await response.json();
+    const requestBody = route.body
+      ? JSON.stringify(route.body.parse(body))
+      : undefined;
+    const signal = AbortSignal.timeout(
+      [
+        "summarizeComments",
+        "interpretPreferences",
+        "explainProjection",
+      ].includes(operation)
+        ? 150000
+        : 45000,
+    );
+    let response: Response;
+    let payload: unknown;
+    try {
+      response = await fetch(path, {
+        method: route.method,
+        headers,
+        ...(requestBody ? { body: requestBody } : {}),
+        signal,
+        credentials: "omit",
+        redirect: "error",
+        cache: "no-store",
+      });
+    } catch {
+      throw new HttpError(
+        "LOCAL_CONNECTION_FAILED",
+        "连接本机服务中断或超时，请确认程序仍在运行后重试。已提交的操作可能仍在执行，请先查看当前状态。",
+      );
+    }
+    try {
+      payload = await response.json();
+    } catch {
+      throw new HttpError(
+        "INVALID_RESPONSE",
+        "本机服务响应不完整或格式无效，请查看当前状态后重试。",
+      );
+    }
     if (!response.ok) {
       const parsed = Failure.safeParse(payload);
       throw new HttpError(

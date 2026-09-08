@@ -746,7 +746,9 @@ it("the HTTP adapter reuses its idempotency key after a lost committed response"
     snapshotId: originalSnapshot.meta.id,
     name: "Exactly once",
   };
-  await expect(client.createPlan(input)).rejects.toThrow(/connection lost/);
+  await expect(client.createPlan(input)).rejects.toMatchObject({
+    code: "LOCAL_CONNECTION_FAILED",
+  });
   const replay = await client.createPlan(input);
   expect(replay.plan.content.name).toBe("Exactly once");
   expect(w.store.plans()).toHaveLength(2);
